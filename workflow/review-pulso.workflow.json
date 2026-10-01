@@ -92,9 +92,10 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseCode": 400,
         "responseBody": "={{ { accepted: false, error: $json.pipeline_error, hint: $json.pipeline_error_hint } }}",
-        "options": {}
+        "options": {
+          "responseCode": 400
+        }
       },
       "id": "a1000000-0000-4000-8000-000000000003c",
       "name": "Node 3c - Respond bad input",

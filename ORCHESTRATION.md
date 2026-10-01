@@ -226,7 +226,7 @@ resulting report had correct layout, correct headers, and zero reviews, with
 every status code at 200.
 
 This is the defect class that behavioural tests cannot catch. `test 19`
-(74 assertions) exists to validate node parameters against their declared enums
+(75 assertions) exists to validate node parameters against their declared enums
 and types — it checks the *wiring*, which is the layer a functional test skips.
 
 ### `readWriteFile` is binary-only
@@ -374,6 +374,28 @@ The distinction that matters: **Node 3's throws were about the client's file, so
 the client deserves an answer. Nodes 5 and 7 are about our own integrity, so the
 operator deserves a log entry.**
 
+### `responseCode` is an option, not a parameter
+
+Worth recording because the first attempt at this fix appeared to work and did not.
+
+`Respond to Webhook` takes its status code from `parameters.options.responseCode`,
+not from a top-level `responseCode`. Putting it at the top level **does not error.**
+n8n ignores the unknown key and answers `200`.
+
+The failure was therefore nastier than no status at all: the rejection body arrived
+correctly, carrying the real reason, under a *success* status. A client checking
+`res.ok` would treat a rejected file as accepted. Live test caught it — the body
+was right and the status was wrong, which is exactly the combination that survives
+a casual look.
+
+```
+parameters: { respondWith: "json", responseBody: "...", options: { responseCode: 400 } }
+```
+
+Both `test 17` and `test 19` now assert the *location*, and `test 19` additionally
+asserts no top-level `responseCode` exists, because the bug's signature is
+"correct value, wrong place".
+
 ---
 
 ## 6. Testing strategy
@@ -393,11 +415,11 @@ test 13   report fits on one A4 page
 test 16   accuracy scoring                                      (slow)
 test 17   upload page, escaping, workflow wiring, 400 path    45 assertions
 test 18   proxy and CORS behaviour                              20 assertions
-test 19   node parameter validation, branch wiring            74 assertions
+test 19   node parameter validation, branch wiring            75 assertions
 test 20   output directory writability
 ```
 
-**252 assertions in the quick suite.**
+**258 assertions in the quick suite.**
 
 The important structural point: these tests verify **code and wiring**, not
 business correctness. Nothing here can tell you the model is accurate for your

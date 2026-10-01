@@ -394,13 +394,20 @@ IF_VALID_NODE = {
 RESPOND_ERROR_NODE = {
     "parameters": {
         "respondWith": "json",
-        "responseCode": 400,
         "responseBody": (
             "={{ { accepted: false, "
             "error: $json.pipeline_error, "
             "hint: $json.pipeline_error_hint } }}"
         ),
-        "options": {},
+        # responseCode is an OPTION on this node, not a top-level parameter.
+        # Read out of the installed node rather than assumed:
+        #   RespondToWebhook description.properties[].name === 'options'
+        #     -> options[].name === 'responseCode' (number)
+        # Putting it at the top level does not error. n8n ignores the unknown
+        # key and answers 200, so the rejection body arrived with a success
+        # status - which is worse than no status at all, because a client
+        # checking res.ok would treat a rejected file as accepted.
+        "options": {"responseCode": 400},
     },
     "id": "a1000000-0000-4000-8000-000000000003c",
     "name": "Node 3c - Respond bad input",

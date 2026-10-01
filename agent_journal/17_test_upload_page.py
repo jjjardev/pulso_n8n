@@ -309,9 +309,14 @@ def t3_workflow_contract():
 
     err_responders = [n for n in wf["nodes"]
                       if n["name"].endswith("bad input")]
+    # responseCode lives in parameters.options on this node. Asserting it at the
+    # top level passed while the deployed workflow answered 200, because n8n
+    # ignores unknown top-level parameters instead of erroring.
     check("workflow has a 400 rejection responder",
           len(err_responders) == 1
-          and err_responders[0]["parameters"].get("responseCode") == 400)
+          and (err_responders[0]["parameters"].get("options") or {}).get("responseCode") == 400,
+          json.dumps(err_responders[0]["parameters"].get("options"))
+          if err_responders else "no rejection responder")
 
     ext = nodes.get("Node 2", {}).get("parameters", {})
     check("Node 2 reads the binary field 'reviews_file'",

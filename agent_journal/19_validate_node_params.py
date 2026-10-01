@@ -204,9 +204,17 @@ def main():
     check("a rejection responder exists", len(err_nodes) == 1)
     if err_nodes:
         e = err_nodes[0]
+        # responseCode is an OPTION, not a top-level key. Asserting the wrong
+        # location is how the rejection shipped returning 200: n8n silently
+        # ignores an unknown top-level parameter.
+        opts = e["parameters"].get("options") or {}
         check("rejection responder returns HTTP 400",
-              e["parameters"].get("responseCode") == 400,
-              str(e["parameters"].get("responseCode")))
+              opts.get("responseCode") == 400,
+              f"options={opts.get('responseCode')} "
+              f"top-level={e['parameters'].get('responseCode')}")
+        check("rejection code is in options, not top level",
+              "responseCode" not in e["parameters"],
+              "top-level responseCode is silently ignored by n8n")
         body = e["parameters"].get("responseBody", "")
         check("rejection body surfaces the real reason",
               "pipeline_error" in body and "pipeline_error_hint" in body)

@@ -13,7 +13,7 @@ No external AI service, no API keys, no per-review cost.
 | **Runtime** | 4 Docker containers: n8n, tagasenti (FastAPI + ONNX Runtime), Gotenberg (PDF), nginx (upload page) |
 | **Throughput** | ~37 reviews/sec on a 6-core CPU; a 100-review report lands in **4.7–12.4 s** |
 | **Credentials** | **Zero.** No API key, no token, no SMTP password. |
-| **Test coverage** | 252 assertions across 8 suites, plus 2 accuracy suites |
+| **Test coverage** | 258 assertions across 8 suites, plus 2 accuracy suites |
 
 ---
 
@@ -122,7 +122,7 @@ Then open **<http://localhost:8080/>**.
 Verify the install:
 
 ```bash
-bash agent_journal/run_all_tests.sh    # 252 assertions, no containers needed
+bash agent_journal/run_all_tests.sh    # 258 assertions, no containers needed
 sudo bash agent_journal/09_smoke_test.sh   # needs the stack running
 ```
 
