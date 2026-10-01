@@ -122,7 +122,7 @@ Then open **<http://localhost:8080/>**.
 Verify the install:
 
 ```bash
-bash agent_journal/run_all_tests.sh    # 243 assertions, no containers needed
+bash agent_journal/run_all_tests.sh    # 252 assertions, no containers needed
 sudo bash agent_journal/09_smoke_test.sh   # needs the stack running
 ```
 
@@ -148,9 +148,10 @@ keep.
 **Phase 2 — build.** The specification was handed over as an implementation
 brief, together with a standing instruction to produce a pedantic build journal
 as it went. The result is
-[`agent_journal/JOURNAL.md`](agent_journal/JOURNAL.md) — 2,270 lines across 34
-sections, recording measurements, failures, dead ends, and the reasoning behind
-each choice.
+[`agent_journal/JOURNAL.md`](agent_journal/JOURNAL.md) — 2,440 lines. The first half records the build: measurements, failures,
+dead ends, and the reasoning behind each choice. The second half records
+what testing the finished pipeline found, including eight defects that survived
+that build.
 
 **Phase 3 — artifact.** A complete, runnable, documented system: 21 numbered
 build/test scripts, an 854-line operator manual, and a test suite that verifies
@@ -170,7 +171,7 @@ Sep 30  17:54  specification written                     1 artifact
 
 **Seventeen-fifty-four to twenty-two-nineteen on Sep 30, 2026 — about four and
 a half hours from specification to a complete four-container system**, producing
-243 automated assertions, a 2,270-line build journal, and an 854-line operator
+252 automated assertions, a 2,440-line journal, and an 854-line operator
 manual. The heaviest hour produced 21 artifacts.
 
 Two things this timeline does *not* include: the model itself was trained
@@ -215,7 +216,7 @@ pulso_n8n/
 ├── OPERATIONS.md               854-line operator manual
 ├── ORCHESTRATION.md            design decisions, contracts, n8n gotchas
 └── agent_journal/              the build record
-    ├── JOURNAL.md              2,270 lines, 34 sections
+    ├── JOURNAL.md              2,440 lines: the build, then what testing found
     ├── 01…21_*                 numbered build & test scripts, in build order
     ├── run_all_tests.sh        one-command test runner (--full for slow suites)
     ├── data/  evidence/  history/  snippets/

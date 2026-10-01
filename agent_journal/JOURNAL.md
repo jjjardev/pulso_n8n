@@ -26,6 +26,11 @@
 
 # AGENT JOURNAL — Review Pulso n8n Pipeline Build
 
+> **Two parts.** Sections 1–19 are the original build on 2026-09-30.
+> **Part Two (§20 onwards, 2026-10-01)** is what happened when the finished
+> pipeline was tested properly, including the eight defects that survived the
+> first build. Start there if you want to know what is actually wrong with it.
+
 **Build date:** 2026-09-30
 **Builder:** Claude (AI agent), on the machine `jjjarder`
 **Goal:** Build the Review Pulso pipeline described in
@@ -2298,3 +2303,143 @@ The durable finding is not the absolute number — it is that **throughput per
 review depends heavily on review length**, so any capacity figure is only valid
 for the review length it was measured at. The doc's figure was measured on 15-token
 test strings; real reviews are 3–9× longer.
+
+---
+
+# PART TWO — VERIFICATION AND REPAIR (2026-10-01)
+
+The build above was judged complete on the 30th. This part records what
+happened when someone actually tried to use it, which is where the remaining
+defects came from. Sections 1-19 are unchanged.
+
+**Context:** the project was restructured for publication - the runtime moved
+into the repository root, paths were parameterised, and it was turned into a
+public repo. Then everything was tested again, including things the original
+build never tested.
+
+## 20. What testing found
+
+| # | Defect | How it was found | Severity |
+|---|---|---|---|
+| 1 | `uploader` reported unhealthy while serving perfectly | `docker compose ps` | Low - but it makes every health check untrustworthy |
+| 2 | `09_smoke_test.sh` looked for `sample-report.html` in the wrong directory | ran the suite | Low - T6 failed on a file that existed |
+| 3 | Throughput table in `ORCHESTRATION.md` was built on a bad measurement | re-ran `01` | **High - a published claim that was wrong** |
+| 4 | The 1000-review cap's justification used a stale timeout | re-ran `02` | Medium - the cap was still defensible, for a different reason |
+| 5 | Node 3 threw on bad input, so clients got "Error in workflow" | live upload of 1100 rows | **High - every rejection was unhelpful** |
+| 6 | n8n 2.x renamed `user_entity` to `user`, breaking the volume helper | ran `11_n8n_volume.sh inspect` | **High - the tool you need before rotating the encryption key was broken** |
+| 7 | A fresh clone could not build until `fetch_model.sh` was run, with no hint | cloned to a scratch dir | Medium - the repo's central promise |
+| 8 | A second copy of the project silently cannot run | noticed the compose project name | Low - documentation gap |
+
+### 20.1 The healthcheck that was always wrong
+
+```yaml
+test: ["CMD", "wget", "-qO-", "http://localhost/"]     # wrong
+test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]     # right
+```
+
+Inside a container, `localhost` resolves to `::1` first. nginx listens only on
+IPv4 `0.0.0.0:80`. Confirmed directly: `wget 127.0.0.1` succeeded, `wget [::1]`
+and `wget localhost` both returned "Connection refused". The container was
+healthy the entire time.
+
+### 20.2 My own documentation was wrong
+
+`ORCHESTRATION.md` claimed a worst case of "12.8 rev/s, so cap < 768". That
+figure came from a run **with a misconfigured tokenizer**, before `tagasenti/`
+was populated correctly. Grepping the repository found `12.8` in exactly one
+place: my own document.
+
+Four measurements were taken instead, and they disagree:
+
+| Measurement | Rate |
+|---|---|
+| `01` direct ONNX, short reviews | 39.0 rev/s |
+| `02` via `run_many()`, same reviews | 12.4 rev/s |
+| `02` via `run_many()`, ~112-token reviews | 1.5 rev/s (3.1 unloaded) |
+| `04` direct ONNX, all rows padded to 128 tok | 2.7 rev/s |
+
+The 3x gap between `01` and `02` on identical input is **unexplained** and is
+recorded as such rather than given a convenient story. The numbers are also
+load-dependent: the same benchmark ran at half speed while this machine was at
+load average 4.72.
+
+The cap was re-derived against the timeout the implementation actually has -
+Node 4's 600s - and 1000 rows at ~112 tokens measures 326s unloaded. It was
+655s under load, which would have timed out. That limit is now documented
+rather than glossed.
+
+### 20.3 The defect I am most glad I found
+
+Node 3 built this message:
+
+```
+Too many reviews: 1100 unique rows found, but the cap is 1000.
+Split the CSV into files of 1000 rows or fewer ...
+```
+
+and then `throw` it. **A throw aborts the execution, so `Respond to Webhook`
+never runs.** n8n returned `{"message":"Error in workflow"}`, HTTP 500. The
+message was constructed in one node and discarded by the framework in the next.
+
+The same pattern silently swallowed the "no usable reviews found" error.
+
+The generalisable rule, now in `ORCHESTRATION.md`: **in n8n, a `throw` is
+invisible to your own Respond node.** Checks whose messages are meant for humans
+need a routing path.
+
+Fixed with two nodes - an IF and a 400 responder. The IF's parameter shape was
+read out of the installed n8n 2.40.7 rather than guessed, because a malformed
+condition does not error loudly; it just routes everything one way.
+
+Two throws were deliberately left alone, and the distinction matters:
+
+- **Node 5** - tagasenti returned a different result count than reviews sent.
+  That is a broken contract between our own services. It belongs in the
+  operator's log; a 4xx would mislabel it as the client's fault.
+- **Node 7** - the filename safety assertion. It must block the write to
+  prevent path traversal. Security controls fail closed.
+
+## 21. Errors I made during verification
+
+Recorded because the pattern is consistent: my checks asserted the contract I
+believed existed, not the one that did.
+
+| # | Mistake | Caught by |
+|---|---|---|
+| 1 | Wrote a throughput table from a misconfigured run | re-running the benchmark and grepping for the number |
+| 2 | Called a clipped-looking PNG a rendering bug | reading the PDF's text layer before reporting |
+| 3 | `-F "business_name=<script>..."` returned `http=000` and looked like a crash | curl's `-F` treats `name=<value` as *read from file*; `--form-string` is correct. **My test harness was wrong, not the pipeline.** |
+| 4 | Built a 1100-row file by concatenating one 100-row file, then read the "accepted" result as a pass | Node 3 dedupes, so 1100 rows were 100 unique. The cap was never exercised. |
+| 5 | Assumed the browser and `curl` hit the same path | they do not - the browser goes through the nginx proxy. Verified separately. |
+| 6 | Generated a template replacement that leaked `{var}` into five files | the test suite went 6/8 red |
+| 7 | Wrote a `verify` call before `mv`, so it hashed a file that did not exist yet | running `fetch_model.sh` rather than reading it |
+
+## 22. Verified working
+
+Not "should work" - observed:
+
+- 8/8 quick suites, 252 assertions
+- `01`, `02` (21 checks), `09` (all smoke tests), `14` (all six visual items)
+- Live upload through the **nginx proxy**, not just direct to n8n: HTTP 200, 100 reviews, 17s
+- Path traversal `../../../../etc/cron.d/pwned` - contained, slugified to `etc-cron-d-pwned`
+- XSS payload - contained, rendered as literal text in the PDF
+- Blank review cells among valid rows - skipped, valid rows scored
+- Two simultaneous uploads - both succeeded, serialised (13.7s each alone, 30.4s together)
+- Fresh clone - `fetch_model.sh` verified all four files against pinned digests in 71s; image built in 101s
+- Generator is deterministic - regenerating produces a byte-identical workflow
+- `du -L` needed for the model size check, because the working tree uses a symlink and plain `du` reports 0
+
+## 23. Still open
+
+1. **The 400 fix needs a re-import.** It is in `05_generate_workflow_json.py`
+   and the generated JSON, but the running n8n still has the 9-node copy. The
+   operator must import and Publish again. This is the only way to confirm the
+   IF node's runtime routing, which was verified structurally (74 assertions)
+   and by executing Node 3's real code, but not end to end.
+2. **Business accuracy is still unvalidated.** No human-labelled client data
+   exists. Everything above verifies that the pipeline runs, not that the model
+   is right for real reviews.
+3. **Encryption key is still the placeholder.** Zero credentials, so nothing is
+   exposed. Rotate before adding any.
+4. **n8n holds 10 copies of this workflow**, 8 of them stale duplicates from
+   repeated imports, only 1 published. Delete the rest.

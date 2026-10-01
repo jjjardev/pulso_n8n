@@ -226,7 +226,7 @@ resulting report had correct layout, correct headers, and zero reviews, with
 every status code at 200.
 
 This is the defect class that behavioural tests cannot catch. `test 19`
-(65 assertions) exists to validate node parameters against their declared enums
+(74 assertions) exists to validate node parameters against their declared enums
 and types — it checks the *wiring*, which is the layer a functional test skips.
 
 ### `readWriteFile` is binary-only
@@ -391,13 +391,13 @@ test 10   CSV parser edge cases (node)                          26 assertions
 test 12   filename safety                                       46 assertions
 test 13   report fits on one A4 page
 test 16   accuracy scoring                                      (slow)
-test 17   upload page, escaping, workflow wiring                40 assertions
+test 17   upload page, escaping, workflow wiring, 400 path    45 assertions
 test 18   proxy and CORS behaviour                              20 assertions
-test 19   node parameter validation against declared enums      65 assertions
+test 19   node parameter validation, branch wiring            74 assertions
 test 20   output directory writability
 ```
 
-**243 assertions in the quick suite.**
+**252 assertions in the quick suite.**
 
 The important structural point: these tests verify **code and wiring**, not
 business correctness. Nothing here can tell you the model is accurate for your
