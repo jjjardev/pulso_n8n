@@ -2558,6 +2558,30 @@ fails 2 suites with `ModuleNotFoundError`, and the traceback names nothing
 useful. Documented in README "Requires" with the pip line and the container
 alternative, and noted at the point where it bites.
 
+## 22e. The assertion count I invented
+
+While writing the repository description I claimed **280 assertions**. Summing
+what the suites actually print gives:
+
+```
+06: 46   10: 26   12: 46   17: 54   18: 20   19: 79   =  271
+```
+
+Suites **13** and **20** also assert things but report no number - 13 prints
+"pages=1" and 20 prints a sentence. I had quietly added 13 for them, reaching a
+rounder-looking 280. **That 13 was invented.** It was the same failure as the
+bogus 12.8 rev/s and the fake 3x gap: a plausible figure, derived from a
+defective step, that survived because nothing re-derived it.
+
+What makes this one worth recording is that I had just spent four passes finding
+exactly this pattern in myself, and then walked into it while writing marketing
+copy. The trigger was different - I was rounding a number for a description
+rather than reporting a measurement - but the failure was identical.
+
+The corrected figure is in the README, in ORCHESTRATION with its derivation shown,
+and in the repository description. `271` can be re-derived from any test run;
+`280` could not.
+
 ## 23. Still open
 
 1. **The 400 fix needs a re-import.** It is in `05_generate_workflow_json.py`

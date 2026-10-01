@@ -476,7 +476,13 @@ Two of them have prerequisites the test runner cannot supply: `14` needs
 container image. `07 --live-pdf` cannot work from the host at all, because
 Gotenberg publishes no ports by design.
 
-**280 assertions in the quick suite.**
+**271 counted assertions in the quick suite.**
+
+That figure is the sum of the numbers the suites actually print — 46 + 26 + 46 +
+54 + 20 + 79. Suites 13 and 20 assert things but report no count ("pages=1", and a
+sentence), so they contribute zero to the total. An earlier version of this line
+said 280, which was 271 plus an invented 13 for those two suites. The corrected
+number is the one that can be re-derived from a test run.
 
 The important structural point: these tests verify **code and wiring**, not
 business correctness. Nothing here can tell you the model is accurate for your

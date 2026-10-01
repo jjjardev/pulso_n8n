@@ -13,7 +13,7 @@ No external AI service, no API keys, no per-review cost.
 | **Runtime** | 4 Docker containers: n8n **2.40.7 (pinned)**, tagasenti (FastAPI + ONNX Runtime), Gotenberg 8 (PDF), nginx (upload page) |
 | **Throughput** | A 100-review report completes end to end in **4.6–13.7 s** on a 6-core CPU (measured; the spread is machine load, not the model) |
 | **Credentials** | **Zero.** No API key, no token, no SMTP password. |
-| **Test coverage** | 280 assertions across 8 suites, plus 2 slow accuracy suites — **run on every push by CI** ([`.github/workflows/quick-suite.yml`](.github/workflows/quick-suite.yml)) |
+| **Test coverage** | 271 assertions across 8 suites, plus 2 slow accuracy suites — **run on every push by CI** ([`.github/workflows/quick-suite.yml`](.github/workflows/quick-suite.yml)) |
 
 ---
 
@@ -172,7 +172,7 @@ Then open **<http://localhost:8080/>**.
 Verify the install:
 
 ```bash
-bash agent_journal/run_all_tests.sh    # 280 assertions, no containers needed
+bash agent_journal/run_all_tests.sh    # 271 counted assertions, no containers needed
 sudo bash agent_journal/09_smoke_test.sh   # needs the stack running
 ```
 
