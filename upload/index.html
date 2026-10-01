@@ -99,9 +99,10 @@
 <div class="wrap">
 
   <header>
-    <h1>Review Pulso — Filipino Sentiment Report</h1>
-    <p>Upload a CSV of customer reviews, one review per row. Your report is
-       generated as a PDF and saved to the server.</p>
+      <h1>Review Pulso — Filipino Sentiment Report</h1>
+      <p>Upload a CSV of customer reviews, one review per row. Your report is
+         scored and saved as a one-page PDF on the server. This page stays open
+         while that happens, then shows you the result.</p>
   </header>
 
   <div class="card">
@@ -330,15 +331,44 @@ go.addEventListener('click', async () => {
     }
 
     bar.firstElementChild.style.width = '100%';
-    // n8n replies 200 "Workflow was started" as soon as it ACCEPTS the upload.
-    // That is NOT the report. The model needs ~1 minute to score 500 reviews,
-    // so we must be explicit that nothing is finished yet, or the client will
-    // look for a PDF that does not exist yet.
-    show('ok', 'Upload received — your report is being generated.',
-      'The review ' + chosen.name + ' was accepted. Scoring takes about a minute '
-      + 'for a few hundred reviews, then the PDF and a JSON summary are saved '
-      + 'to the server’s download folder. You can close this page.');
-    setTimeout(() => { bar.className = ''; }, 1200);
+
+    // The report is ALREADY FINISHED when this runs.
+    //
+    // The comment that used to be here claimed the opposite - that n8n replies
+    // 200 as soon as it ACCEPTS the upload and that nothing has been produced
+    // yet. That was true when Respond to Webhook sat early in the chain. It is
+    // not true now. Node 1 uses responseMode=responseNode and Node 1b - Respond
+    // is step 10 of the execution order, while Node 8 - Save PDF is step 9, so
+    // the file is on disk before this request returns.
+    //
+    // Verified from the connections graph, and by measuring: a 100-review
+    // upload returns in 4.6-6.3s and the PDF is present at that moment.
+    //
+    // So the response body is not a receipt to be discarded - it carries the
+    // finished result, and the page should show it rather than tell the user
+    // to go away and come back later.
+
+    let done = null;
+    try { done = JSON.parse(text); } catch (e) { done = null; }
+
+    if (!done || done.accepted !== true) {
+      // A 200 whose body is not the expected JSON means the workflow is running
+      // a different version than this page expects. Say that plainly rather
+      // than claiming success on an unknown payload.
+      return show('err', 'The service replied, but not in the expected format.',
+        'Expected a JSON body with accepted:true. Got: '
+        + text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200)
+        + ' — this usually means the published workflow is an older version than '
+        + 'the page. Re-import workflow/review-pulso.workflow.json and publish.');
+    }
+
+    const verdict = done.verdict || 'see the report';
+    const score = Number.isFinite(done.net_score) ? done.net_score : '?';
+    show('ok', 'Report ready — ' + done.reviews + ' reviews, net score '
+      + score + ' (' + verdict + ').',
+      'Saved as ' + done.pdf + ' in the server’s download folder.');
+
+    setTimeout(() => { bar.className = ''; }, 4000);
     return undefined;
   } catch (err) {
     bar.className = '';

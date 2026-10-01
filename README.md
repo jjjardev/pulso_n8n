@@ -11,9 +11,9 @@ No external AI service, no API keys, no per-review cost.
 | **Model** | [`jjjardev/tagasenti_model`](https://huggingface.co/jjjardev/tagasenti_model) — XLM-RoBERTa-large, INT8 quantized, CPU-only |
 | **Labels** | `Negative` / `Neutral` / `Positive` |
 | **Runtime** | 4 Docker containers: n8n, tagasenti (FastAPI + ONNX Runtime), Gotenberg (PDF), nginx (upload page) |
-| **Throughput** | ~37 reviews/sec on a 6-core CPU; a 100-review report lands in **4.7–12.4 s** |
+| **Throughput** | A 100-review report completes end to end in **4.6–13.7 s** on a 6-core CPU (measured; the spread is machine load, not the model) |
 | **Credentials** | **Zero.** No API key, no token, no SMTP password. |
-| **Test coverage** | 258 assertions across 8 suites, plus 2 accuracy suites |
+| **Test coverage** | 267 assertions across 8 suites, plus 2 accuracy suites |
 
 ---
 
@@ -122,7 +122,7 @@ Then open **<http://localhost:8080/>**.
 Verify the install:
 
 ```bash
-bash agent_journal/run_all_tests.sh    # 258 assertions, no containers needed
+bash agent_journal/run_all_tests.sh    # 267 assertions, no containers needed
 sudo bash agent_journal/09_smoke_test.sh   # needs the stack running
 ```
 
@@ -248,9 +248,14 @@ distribution. **Quote 84.8%.**
 
 Known weaknesses, straight from the model card:
 
-- **Idioms are the unsolved case** — 8 of 17 remaining adversarial errors (47%)
-  are Filipino idioms and figurative language. Stable across three training
-  generations. For a review-sentiment product, this is the sharpest edge.
+- **Idioms are the unsolved case.** On the adversarial benchmark, Filipino idioms
+  and figurative language account for 8 of 17 remaining errors (47%). Stable
+  across three training generations — template-based generation cannot teach
+  non-compositional meaning, so `ningas-kugon` and its relatives stay wrong.
+  For a review-sentiment product this is the sharpest edge. *Note: that 47% is
+  measured on v4/v5.1; the shipped v6 checkpoint was not independently
+  benchmarked on that set, so treat it as the standing weakness rather than a
+  v6-specific measurement.*
 - **Neutral is the weakest class** (F1 0.831 vs 0.861 / 0.853). Hedged and
   mixed-sentiment reviews land in Positive or Negative. Expect neutral counts to
   run low.

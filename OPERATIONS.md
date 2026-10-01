@@ -159,14 +159,22 @@ This is the part you'll do most.
 
 ### How long it takes
 
-| Reviews | Typical (short reviews) | Worst case (long reviews) |
+| Reviews | Measured end to end | Notes |
 |---|---|---|
-| 100 | ~10 seconds | ~30 seconds |
-| 500 | ~55 seconds | ~3 minutes |
-| 1000 | ~2 minutes | ~6 minutes |
+| 100 | **4.6 – 13.7 s** | the spread is machine load, not the model |
+| 500 | **~24 s** | |
+| 1000 | **~52 s** | the cap; comfortably inside the 600 s timeout |
 
-The hard limit is **1000 reviews per upload**. If you upload more, the page
-tells you to split the file — that's a deliberate safety limit, not a fault.
+These are wall-clock timings for the whole pipeline — upload, inference, PDF
+render, write — measured on this 6-core machine, not inferred from the
+throughput benchmark. Long, detailed reviews cost proportionally more: the
+worst case measured 326 s for 1000 rows against a 600 s timeout, so the
+margin is real but not generous on a busy box.
+
+The hard limit is **1000 reviews per upload**. Beyond it the page returns
+HTTP 400 and tells you to split the file — a deliberate safety limit, not a
+fault. Duplicate rows are removed *before* the count, so uploading the same
+file twice does not hit the cap.
 
 ### What your CSV must look like
 
@@ -737,9 +745,16 @@ python3 13_fit_one_page.py --stress      # the report fits on one page
   they are reachable only from inside the Docker network. The smoke test
   verifies this, and it also checks that n8n *is* reachable, so the check cannot
   pass by silently testing nothing.
-- **n8n is bound to `127.0.0.1:5678`** and the upload page to `127.0.0.1:8080`.
-  Nothing is reachable from the network. This was previously n8n on `0.0.0.0`,
-  which left an unauthenticated webhook answering on the LAN.
+  - **n8n is bound to `127.0.0.1:5678`** and the upload page to `127.0.0.1:8080`.
+    Nothing is reachable from the network. This was previously n8n on `0.0.0.0`,
+    which left an unauthenticated webhook answering on the LAN.
+    Re-check it after any n8n upgrade, because the default is `0.0.0.0`:
+
+    ```bash
+    sudo docker compose ps --format '{{.Service}} {{.Ports}}'
+    # want:  n8n  127.0.0.1:5678->5678/tcp
+    # if it says 0.0.0.0:5678->5678/tcp, the webhook is open to your network
+    ```
 - Review text in a report is escaped, so a review containing `<script>` cannot
   break the PDF. There is a test for this (`17`).
 - The output filename is slugified *and* asserted against an allowlist regex,

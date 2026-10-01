@@ -29,6 +29,7 @@ USAGE
 """
 
 import io
+import json
 import os
 import re
 import subprocess
@@ -118,8 +119,52 @@ def t1_markup_and_script():
 
     # UX correctness
     check("rejects non-CSV client-side", ".csv" in js)
-    check("warns the user the report is not ready yet",
-          "being generated" in js or "close this page" in js)
+
+    # ---- what the success path claims ------------------------------------
+    # Three strings here were false and shipped, because nothing asserted
+    # them. Node 1b - Respond is step 10 and Node 8 - Save PDF is step 9, so
+    # the report EXISTS when this response arrives; the page used to say
+    # "being generated ... you can close this page", which was inherited from
+    # a time when Respond sat early in the chain. It also promised "a JSON
+    # summary" that has not existed since the sidecar was removed.
+    #
+    # These assertions exist so that a future edit cannot quietly reintroduce a
+    # claim that contradicts the execution order or the write nodes.
+    check("success path reports the report is READY",
+          "Report ready" in js)
+    check("success path shows the filename it produced",
+          "done.pdf" in js or "done['pdf']" in js or "done.pdf" in js)
+    check("success path shows the measured result",
+          "done.reviews" in js and "net_score" in js)
+
+    check("does NOT claim the report is still being generated",
+          "being generated" not in js)
+    check("does NOT tell the user to close the page",
+          "close this page" not in js)
+    check("does NOT promise a JSON summary (sidecar was removed)",
+          "JSON summary" not in js and "json summary" not in js)
+
+    # It must parse the success body rather than discarding it as a receipt.
+    check("parses the success JSON body", "JSON.parse(text)" in js)
+    check("handles a 200 whose body is not the expected JSON",
+          "accepted !== true" in js)
+
+    # Structural claim the comments depend on, asserted rather than assumed.
+    # If the Respond node ever moves before Save PDF again, the page's "ready"
+    # wording becomes false and this fails.
+    wf = json.load(open(os.path.join(REPO_ROOT, "workflow",
+                                    "review-pulso.workflow.json")))
+    cn = wf["connections"]
+    write_then_respond = (
+        cn.get("Node 8 - Save PDF", {}).get("main", [[{}]])[0]
+        and cn["Node 8 - Save PDF"]["main"][0][0]["node"] == "Node 1b - Respond"
+    )
+    check("workflow writes the PDF BEFORE responding (so 'ready' is true)",
+          write_then_respond)
+    write_nodes = [n["name"] for n in wf["nodes"]
+                   if n["type"].endswith("readWriteFile")]
+    check("only the PDF is written (no JSON sidecar node exists)",
+          len(write_nodes) == 1, str(write_nodes))
     return js
 
 

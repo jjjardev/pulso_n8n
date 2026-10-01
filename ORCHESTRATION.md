@@ -134,7 +134,8 @@ for an unloaded machine. Two independent guards sit behind it:
    bypass the workflow.
 
 Node 4 has a 600 s timeout; the workflow itself has 900 s. Measured reality is
-**4.7-13.7 s** end to end for a 100-review report.
+**4.6-13.7 s** end to end for a 100-review report, and 52 s for the 1000-row cap.
+All measured, not projected.
 
 ### Why single-worker is deliberate
 
@@ -304,7 +305,7 @@ Verified by live upload, not by inspection:
 
 | Input | Result |
 |---|---|
-| 100 reviews, normal | HTTP 200, PDF written, 13.7 s |
+| 100 reviews, normal | HTTP 200, PDF written, 4.6-13.7 s |
 | `business_name=<script>alert(1)</script>` | HTTP 200, filename slugified to `script-alert-1-script`, payload rendered as **literal text** in the PDF header |
 | `business_name=../../../../etc/cron.d/pwned` | HTTP 200, filename slugified to `etc-cron-d-pwned`, **nothing written outside the output directory** |
 | header-only CSV (zero data rows) | **HTTP 400** - "No usable reviews found" |
@@ -413,13 +414,13 @@ test 10   CSV parser edge cases (node)                          26 assertions
 test 12   filename safety                                       46 assertions
 test 13   report fits on one A4 page
 test 16   accuracy scoring                                      (slow)
-test 17   upload page, escaping, workflow wiring, 400 path    45 assertions
+test 17   upload page, escaping, 400 path, success claims    54 assertions
 test 18   proxy and CORS behaviour                              20 assertions
 test 19   node parameter validation, branch wiring            75 assertions
 test 20   output directory writability
 ```
 
-**258 assertions in the quick suite.**
+**267 assertions in the quick suite.**
 
 The important structural point: these tests verify **code and wiring**, not
 business correctness. Nothing here can tell you the model is accurate for your
