@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# Model weights and tokenizer — 553 MB, fetched by tagasenti/fetch_model.sh.
+# GitHub refuses files over 100 MB, and these are reproducible from a pinned
+# sha256, so tracking them would only duplicate the upstream repository.
+#
+# fetch_model.sh downloads into tagasenti/ and symlinks the tokenizer files
+# into tagasenti/tokenizer/, so BOTH locations need covering.
+# ---------------------------------------------------------------------------
+tagasenti/*.onnx
+tagasenti/tokenizer/
+tagasenti/tokenizer.json
+tagasenti/tokenizer_config.json
+tagasenti/config.json
+
+# ---------------------------------------------------------------------------
+# Secrets. .env.example is committed and documents every key; .env never is.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------------------
+# Generated reports. One PDF per upload, written into the mounted output dir.
+# ---------------------------------------------------------------------------
+*.pdf
+!agent_journal/evidence/*.pdf
+
+# ---------------------------------------------------------------------------
+# Python / Node build artefacts
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+node_modules/
+
+# ---------------------------------------------------------------------------
+# Local scratch
+# ---------------------------------------------------------------------------
+*.log
+*.tgz
+.DS_Store
+*.swp

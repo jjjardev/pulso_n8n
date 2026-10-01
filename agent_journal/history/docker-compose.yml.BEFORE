@@ -1,0 +1,14 @@
+services:
+  n8n:
+    image: n8nio/n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - TZ=Asia/Manila
+      - N8N_ENCRYPTION_KEY=change-me-to-a-long-random-string
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  n8n_data:

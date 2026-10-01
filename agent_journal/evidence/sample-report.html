@@ -1,0 +1,160 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+@page { size: A4; margin: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', Helvetica, Arial, sans-serif; color: #2b2f33; font-size: 10.5pt; }
+.page { width: 210mm; min-height: 297mm; padding: 8mm 12mm 6mm; }
+.header { background: linear-gradient(135deg,#1d3557 0%,#2f6b8f 100%); color: #fff;
+  border-radius: 3mm; padding: 4mm 5mm; margin-bottom: 3mm; }
+.header h1 { font-size: 16.5pt; font-weight: 700; letter-spacing: .2px; }
+.header .sub { opacity: .85; font-size: 8.5pt; margin-top: 1mm; }
+.verdict { display:inline-block; margin-top: 1.8mm; background: rgba(255,255,255,.15);
+  border: 1px solid rgba(255,255,255,.35); border-radius: 10mm; padding: .9mm 3.5mm; font-size: 8.5pt; font-weight:600; }
+.kpis { display: flex; gap: 3mm; margin: 2mm 0; }
+.kpi { flex: 1; background: #fff; border: 1px solid #e3e7ea; border-top: 3px solid #ccc;
+  border-radius: 2mm; padding: 2.2mm 2mm; text-align: center;
+  box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+.kpi .v { font-size: 15pt; font-weight: 800; }
+.kpi .l { font-size: 7.5pt; color: #6a737b; text-transform: uppercase; letter-spacing: .5px; }
+.kpi.pos { border-top-color:#2fae6e; } .kpi.pos .v { color:#2fae6e; }
+.kpi.neu { border-top-color:#8d979e; } .kpi.neu .v { color:#8d979e; }
+.kpi.neg { border-top-color:#e05252; } .kpi.neg .v { color:#e05252; }
+.kpi.net { border-top-color:#1d3557; } .kpi.net .v { color:#1d3557; }
+.grid { display: flex; gap: 3.5mm; margin-bottom: 2mm; }
+.cards { display: flex; gap: 4mm; align-items: flex-start; }
+.col { flex: 1; min-width: 0; }
+.panel { background:#fff; border:1px solid #e3e7ea; border-radius:2.5mm; padding: 3mm; }
+.panel h2 { font-size: 10pt; color:#1d3557; margin-bottom: 2mm; }
+.donut-wrap { display:flex; align-items:center; gap:5mm; }
+.donut { width: 30mm; height: 30mm; border-radius: 50%; position: relative; flex-shrink:0; }
+.donut .hole { position:absolute; inset: 6mm; background:#fff; border-radius:50%;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; }
+.donut .hole .big { font-size: 11.5pt; font-weight: 800; color:#1d3557; line-height:1.05; }
+/* The caption must fit INSIDE the hole. At 30mm donut / 6mm inset the hole is
+   18mm across; "NET SCORE" at 6.5pt is wider than that and overflowed onto the
+   coloured ring. 5.5pt plus no letter-spacing fits with ~2mm to spare. */
+.donut .hole .small { font-size: 5.5pt; color:#8d979e; letter-spacing: 0; }
+.legend div { margin-bottom: 1.2mm; font-size: 8.5pt; }
+.dot { display:inline-block; width: 3mm; height: 3mm; border-radius: 50%; margin-right: 2mm; vertical-align: -0.3mm; }
+.stack { height: 7mm; border-radius: 2mm; overflow: hidden; display: flex; margin: 2mm 0 1.5mm; }
+.stack div { height: 100%; }
+.stacklabels { display:flex; justify-content: space-between; font-size: 8pt; color:#6a737b; }
+.gauge { position: relative; height: 5mm; border-radius: 2.5mm; margin-top: 1.5mm;
+  background: linear-gradient(90deg,#e05252 0%,#d9b23a 45%,#d9b23a 55%,#2fae6e 100%); }
+.gauge .marker { position: absolute; top: -1.5mm; width: 1.6mm; height: 9mm; background:#1d3557;
+  border-radius: 1mm; left: calc(50% - 0.8mm); }
+.gauge-labels { display:flex; justify-content:space-between; font-size:7.5pt; color:#8d979e; margin-top:1mm; }
+ul.insights { list-style: none; }
+ul.insights li { padding: 1.5mm 0 1.5mm 5mm; position: relative; border-bottom: 1px dashed #eceff1; font-size: 9.2pt; line-height: 1.35; }
+ul.insights li:before { content: "▸"; position: absolute; left: 0; color: #2f6b8f; }
+ul.insights li:last-child { border-bottom: none; }
+ol.recs { padding-left: 4.5mm; }
+ol.recs li { margin-bottom: 1.3mm; font-size: 9.2pt; line-height: 1.35; }
+.ccard { border: 1px solid #e9edf0; border-left: 3px solid #ccc; border-radius: 2mm;
+  padding: 1.8mm 2.5mm; margin-bottom: 1.8mm; background: #fbfcfd; }
+.cbadge { color:#fff; font-size: 7.2pt; font-weight:700; border-radius: 8mm; padding: .7mm 2.4mm; }
+.ctext { display:block; font-size: 9pt; margin: 1mm 0; font-style: italic; color:#39424a; line-height:1.3; }
+.cbar { height: 1.3mm; background:#eef1f3; border-radius: .7mm; overflow: hidden; }
+.cbar div { height: 100%; border-radius: 1mm; }
+.cconf { font-size: 7.2pt; color:#9aa4ac; display:block; margin-top: .8mm; }
+p.more { font-size: 7.5pt; color:#8d979e; font-style: italic; margin: 0 0 .6mm; }
+h3.sec { font-size: 10pt; color:#1d3557; margin: 2mm 0 1.2mm; border-left: 3px solid #2f6b8f; padding-left: 2mm; }
+.footer { margin-top: 3mm; padding-top: 2mm; border-top: 1px solid #e6eaed;
+  font-size: 7pt; color: #9aa4ac; display:flex; justify-content: space-between; }
+</style></head><body><div class="page">
+
+<div class="header">
+  <h1>Review Pulso - Sentiment Report</h1>
+  <div class="sub"><b>SariSari Store Malate</b> &middot; Q3 2026 &middot; 5 reviews analyzed &middot; September 30, 2026</div>
+  <div class="verdict">Mixed - room to improve</div>
+</div>
+
+<div class="kpis">
+  <div class="kpi pos"><div class="v">40%</div><div class="l">Positive</div></div>
+  <div class="kpi neu"><div class="v">20%</div><div class="l">Neutral</div></div>
+  <div class="kpi neg"><div class="v">40%</div><div class="l">Negative</div></div>
+  <div class="kpi net"><div class="v">0</div><div class="l">Net score</div></div>
+</div>
+
+<div class="grid">
+  <div class="col panel">
+    <h2>Sentiment mix</h2>
+    <div class="donut-wrap">
+      <div class="donut" style="background:conic-gradient(#e05252 0 40%, #b7bec4 40% 60%, #2fae6e 60% 100%)">
+        <div class="hole"><div class="big">0</div><div class="small">NET SCORE</div></div>
+      </div>
+      <div class="legend">
+        <div><span class="dot" style="background:#2fae6e"></span>Positive 40%</div>
+        <div><span class="dot" style="background:#b7bec4"></span>Neutral 20%</div>
+        <div><span class="dot" style="background:#e05252"></span>Negative 40%</div>
+      </div>
+    </div>
+    <div class="stack">
+      <div style="width:40%;background:#2fae6e"></div>
+      <div style="width:20%;background:#b7bec4"></div>
+      <div style="width:40%;background:#e05252"></div>
+    </div>
+    <div class="stacklabels"><span>&#9650; positive</span><span>negative &#9660;</span></div>
+  </div>
+  <div class="col panel">
+    <h2>Net sentiment gauge</h2>
+    <div class="gauge"><div class="marker"></div></div>
+    <div class="gauge-labels"><span>-100 (all negative)</span><span>0</span><span>+100 (all positive)</span></div>
+    <h2 style="margin-top:4mm">Key insights</h2>
+    <ul class="insights"><li><b>Mixed - room to improve.</b> Net sentiment score of <b>0</b> across 5 reviews.</li><li>40% of reviewers expressed positive sentiment.</li><li>&#9888;&#65039; <b>1 negative review with &#8805;85% model confidence</b> - treat as confirmed complaints and respond first.</li><li>Positivity ratio is <b>1.0:1</b> (positive to negative).</li><li><b>1 review was ambiguous</b> (20.0% of the batch; top two labels within 15% of each other). Treat those labels as a coin-flip and read the text yourself before acting on them.</li></ul>
+    
+  </div>
+</div>
+
+<!-- The two card groups sit SIDE BY SIDE, not stacked. Stacked, six cards
+     cost ~6 x 21mm of vertical space and pushed the report past one A4 page;
+     the only way to recover it was to shrink the body type to 8.2pt, which
+     is too small to read comfortably in print. Two columns cost ~3 x 21mm
+     instead, which leaves enough room for 9.5pt text.
+     Measured: this is the difference between a cramped report and a
+     readable one. See agent_journal/13_fit_one_page.py. -->
+<div class="cards">
+  <div class="col">
+    <h3 class="sec">&#9888;&#65039; Needs attention - top negative reviews</h3>
+    
+  <div class="ccard">
+    <span class="cbadge" style="background:#e05252">Negative</span>
+    <span class="ctext">"Grabe ang panget ng packaging, basag na basag."</span>
+    <div class="cbar"><div style="width:93%;background:#e05252"></div></div>
+    <span class="cconf">93% confidence</span>
+  </div>
+  <div class="ccard">
+    <span class="cbadge" style="background:#e05252">Negative</span>
+    <span class="ctext">"Medyo matagal ang paghihintay at malamig na ang ulam."</span>
+    <div class="cbar"><div style="width:81%;background:#e05252"></div></div>
+    <span class="cconf">81% confidence</span>
+  </div>
+    
+  </div>
+  <div class="col">
+    <h3 class="sec">&#128154; What's working - top positive reviews</h3>
+    
+  <div class="ccard">
+    <span class="cbadge" style="background:#2fae6e">Positive</span>
+    <span class="ctext">"Sulit na sulit, babalik ulit ako dito pramis"</span>
+    <div class="cbar"><div style="width:96%;background:#2fae6e"></div></div>
+    <span class="cconf">96% confidence</span>
+  </div>
+  <div class="ccard">
+    <span class="cbadge" style="background:#2fae6e">Positive</span>
+    <span class="ctext">"Ang bilis ng delivery at ang sarap ng food!"</span>
+    <div class="cbar"><div style="width:95%;background:#2fae6e"></div></div>
+    <span class="cconf">95% confidence</span>
+  </div>
+    
+  </div>
+</div>
+
+<h3 class="sec">Recommended actions</h3>
+<ol class="recs"><li>Address the leading complaint directly - &quot;Grabe ang panget ng packaging, basag na basag.&quot; appears to be the strongest negative signal.</li><li>Amplify what works - customers explicitly praised &quot;Sulit na sulit, babalik ulit ako dito pramis&quot;. Feature it in marketing.</li><li>Reply to every high-confidence negative review within 24h; public, empathetic replies recover visible sentiment faster than silent fixes.</li><li>Re-run this report monthly and track the net score trend - direction matters more than any single reading.</li></ol>
+
+<div class="footer">
+  <span>Powered by <b>TagaSenti</b> &middot; Apache 2.0 &middot; DOI 10.57967/hf/9620</span>
+  <span>Generated by Review Pulso v1.3</span>
+</div>
+
+</div></body></html>

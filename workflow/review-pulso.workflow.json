@@ -1,0 +1,341 @@
+{
+  "name": "Review Pulso - Filipino Sentiment Report (v1.3, disk delivery)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "review-pulso-upload",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "Node 1",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "webhookId": "review-pulso-upload-webhook",
+      "notes": "PUBLISH, DO NOT ACTIVATE. n8n 2.x removed the Active/Inactive toggle; the workflow goes live via Publish. A production webhook is only registered on publish, so until you click Publish this endpoint returns 404 'The requested webhook is not registered'. If it is already published and still 404s, unpublish, nudge a node, and publish again. WEBHOOK, not a Form Trigger. Replaces the form because n8n's test form cannot take file uploads and the production form never registered on this instance. Expects multipart with the file field 'reviews_file', plus 'business_name' and 'context'. Responds IMMEDIATELY (respondNode) so the browser is not held open for the ~1 minute of scoring - a client that times out and re-uploads gets two reports."
+    },
+    {
+      "parameters": {
+        "operation": "csv",
+        "binaryPropertyName": "reviews_file",
+        "options": {
+          "raw": false,
+          "header": true,
+          "skipInitialRows": 0
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "Node 2",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        460,
+        300
+      ],
+      "notes": "CORRECTION: Input Binary Field = 'reviews_file'. Extract From File emits one item per CSV row, each with the CSV's column names as json keys. If this node errors on your n8n version, swap in the quote-aware Code parser in Node 2b (provided as a standalone snippet in agent_journal/snippets/)."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Clean, dedupe and batch reviews into ONE item so that Node 4 can make\n// a single batched HTTP call to tagasenti.\n//\n// Why one item: an n8n HTTP Request node executes once PER INPUT ITEM. If we\n// passed 500 rows through, that is 500 separate POSTs to /predict_batch, each\n// paying its own timeout and connection cost. Collapsing to one item with a\n// `reviews` array is what makes batched inference possible at all.\n\nconst seen = new Set();\nconst reviews = [];\n\nfor (const item of items) {\n  // Node 2 gives us the CSV's own column names, so the text column could be\n  // anything. Try the common aliases in order, then fall back to the first\n  // string-valued field so an oddly-named column still works.\n  const j = item.json;\n  const raw =\n    j.review ?? j.text ?? j.comment ?? j.content ?? j.feedback ??\n    j.review_text ?? j.Review ?? j.Text ??\n    Object.values(j).find(v => typeof v === 'string' && v.trim().length > 0);\n\n  const text = (raw ?? '').toString().trim();\n\n  // Drop empties and stubs - they cannot be scored meaningfully and would\n  // dilute every percentage in the report.\n  if (!text || text.length < 3) continue;\n\n  // Dedupe on a normalised form (lowercased, whitespace-collapsed) but keep\n  // the ORIGINAL text, because the original is what gets printed in the PDF\n  // and the client should see what they actually wrote.\n  const norm = text.toLowerCase().replace(/\\s+/g, ' ').trim();\n  if (seen.has(norm)) continue;\n  seen.add(norm);\n\n  reviews.push(text);\n}\n\nif (reviews.length === 0) {\n  throw new Error('No usable reviews found. Check that your CSV has a column '\n    + 'named review/text/comment/content/feedback and that cells are not empty.');\n}\n\n// CORRECTION 3: the cap is derived from a real benchmark on this host\n// (agent_journal/08_measure_token_throughput.output.log), not assumed.\n// Throughput DEGRADES with review length: 576 tok/s at 57 tokens, 356 tok/s at\n// the 128-token truncation limit. Projected runtimes at those two extremes:\n//   500  reviews  ->  ~50s  (short)  ... ~180s (worst case)\n//  1000  reviews  -> ~100s  (short)  ... ~360s (worst case)\n//  2000  reviews  -> ~200s  (short)  ... ~720s (worst case, would time out)\n// 1000 is the cap because its worst case (360s) fits Node 4's 600s timeout\n// with room to spare. 2000 - the doc's number - would need ~12 minutes at\n// worst-case review length and was rejected on measurement.\nconst CAP = 1000;\nif (reviews.length > CAP) {\n  throw new Error(\n    `Too many reviews: ${reviews.length} unique rows found, cap is ${CAP}.\\n`\n    + `Split the CSV into files of ${CAP} rows or fewer and upload each one - `\n    + `each file gets its own report. Uploads of ~500 rows finish in about a `\n    + `minute; the cap is a safety limit, not a target.`);\n}\n\n// Pull the form metadata from the trigger.\n//\n// CORRECTION (found by switching Node 1 from a Form Trigger to a Webhook): the\n// two nodes put the submitted fields in DIFFERENT PLACES.\n//   Form Trigger -> item.json.business_name\n//   Webhook      -> item.json.body.business_name   (plus .headers/.files/.query)\n// The doc's shape is the trigger's, so a webhook POST silently yields\n// undefined here, and the report would be titled \"Unnamed business\".\n//\n// Read both, so this node is correct whichever trigger it sits behind.\nconst raw = $('Node 1').first().json;\nconst form = (raw && raw.body && typeof raw.body === 'object') ? raw.body : raw;\n\nreturn [{\n  json: {\n    reviews,\n    business_name: form.business_name || 'Unnamed business',\n    context: form.context || '',\n    submitted_at: new Date().toISOString(),\n  },\n}];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "Node 3",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        300
+      ],
+      "notes": "CORRECTION 3: cap=2000 derived from a real benchmark. Dedupes on a normalised form but keeps ORIGINAL text for the PDF. Collapses to ONE item so Node 4 makes a single batched call."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://tagasenti:8000/predict_batch",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ texts: $json.reviews }) }}",
+        "options": {
+          "timeout": 600000,
+          "response": {
+            "response": {
+              "neverError": false,
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "Node 4",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        940,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "notes": "CORRECTION 3: timeout raised 120s -> 600s from a MEASURED token-throughput curve (~458 tok/s). The doc's 120s only works for unrealistically short reviews. Retry 2x, not 3x, to avoid 30-minute executions."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============ 1. AGGREGATE ============\n// CORRECTION 4 (added, not in the doc): every reference is anchored to\n// $('Node 3') / $('Node 5') by NAME, never to $input, so the node keeps\n// working if a sibling node is inserted upstream.\nconst node3 = $('Node 3').first().json;\nconst reviews = node3.reviews;\nconst meta    = node3;\nconst res     = $input.first().json.results;\nconst n       = res.length;\n\nif (!Array.isArray(res) || res.length !== reviews.length) {\n  throw new Error(\n    `tagasenti returned ${Array.isArray(res) ? res.length : 'no'} results for `\n    + `${reviews.length} reviews. These must match exactly, because the report `\n    + `pairs results[i] with reviews[i]. The service dropped or added rows.`);\n}\n\nconst counts = { Negative: 0, Neutral: 0, Positive: 0 };\nconst rows = [];\nres.forEach((r, i) => {\n  counts[r.label]++;\n  const p = r.scores[r.label];\n  // Confidence gap: how far the winning label is from the runner-up. Small\n  // gap = the model was genuinely undecided (see diagnostic 03).\n  const rival = Math.max(...Object.values(r.scores).filter(v => v !== p));\n  const gap = p - rival;\n  rows.push({\n    text: reviews[i],\n    label: r.label,\n    score: p,\n    gap,\n    lowConf: gap < 0.15,\n  });\n});\n\nconst pct = k => +((counts[k] / n) * 100).toFixed(1);\nconst net = +(((counts.Positive - counts.Negative) / n) * 100).toFixed(1);\nconst conf = l => rows.filter(r => r.label === l)\n  .reduce((a, r) => a + r.score, 0) / Math.max(1, counts[l]);\n\nconst top = (label, k = 3) => rows.filter(r => r.label === label)\n  .sort((a, b) => b.score - a.score).slice(0, k);\n\n// How many of each polarity were NOT shown, so the report can say so rather\n// than silently implying these were all of them.\nconst hidden = (label) => Math.max(0, counts[label] - 3);\nconst moreNote = (label, n) => n === 0 ? ''\n  : `<p class=\"more\">…and ${n} more ${label.toLowerCase()} review${n > 1 ? 's' : ''} `\n  + `in this batch, not shown here. The counts above include all of them.</p>`;\n\nconst p = { negative: pct('Negative'), neutral: pct('Neutral'), positive: pct('Positive') };\nconst lowConfCount = rows.filter(r => r.lowConf).length;\n\n// ============ 2. INSIGHT ENGINE (rule-based, no LLM) ============\nconst verdict = net >= 40 ? 'Excellent - customers love you'\n              : net >= 15 ? 'Good - generally favorable'\n              : net >= 0  ? 'Mixed - room to improve'\n              : net >= -15 ? 'At risk - negatives gaining'\n              : 'Critical - act this week';\n\nconst insights = [];\ninsights.push(`<b>${verdict}.</b> Net sentiment score of <b>${net}</b> across ${n} reviews.`);\nif (counts.Positive > 0)\n  insights.push(`${p.positive}% of reviewers expressed positive sentiment${counts.Negative === 0 ? ' - with zero negative reviews.' : '.'}`);\nif (counts.Negative > 0) {\n  const highConfNeg = rows.filter(r => r.label === 'Negative' && r.score >= 0.85 && !r.lowConf).length;\n  if (highConfNeg > 0)\n    insights.push(`&#9888;&#65039; <b>${highConfNeg} negative review${highConfNeg > 1 ? 's' : ''} with &#8805;85% model confidence</b> - treat as confirmed complaints and respond first.`);\n  if (conf('Negative') < 0.70)\n    insights.push(`Negative-review confidence is low (${conf('Negative').toFixed(2)}) - ambiguous or mixed-language text; sample-check before acting.`);\n}\nif (p.neutral > 45)\n  insights.push(`High neutral share (${p.neutral}%) often means short/low-effort reviews - consider prompting customers for more detailed feedback.`);\nif (counts.Positive > 0 && counts.Negative > 0) {\n  const ratio = (counts.Positive / counts.Negative).toFixed(1);\n  insights.push(`Positivity ratio is <b>${ratio}:1</b> (positive to negative).`);\n}\n// CORRECTION 4: honest reporting of ambiguous reviews.\nif (lowConfCount > 0) {\n  const share = ((lowConfCount / n) * 100).toFixed(1);\n  insights.push(`<b>${lowConfCount} review${lowConfCount > 1 ? 's were' : ' was'} ambiguous</b> (${share}% of the batch; top two labels within 15% of each other). Treat those labels as a coin-flip and read the text yourself before acting on them.`);\n}\n\nconst recs = [];\nif (counts.Negative > 0) recs.push(`Address the leading complaint directly - \"${top('Negative',1)[0].text.slice(0,90)}\" appears to be the strongest negative signal.`);\nif (counts.Positive > 0) recs.push(`Amplify what works - customers explicitly praised \"${top('Positive',1)[0].text.slice(0,90)}\". Feature it in marketing.`);\nrecs.push(`Reply to every high-confidence negative review within 24h; public, empathetic replies recover visible sentiment faster than silent fixes.`);\nrecs.push(`Re-run this report monthly and track the net score trend - direction matters more than any single reading.`);\n\n// ============ 3. HTML ============\n// CORRECTION 4: the doc's esc() escaped only & and <. Review text is\n// UNTRUSTED client input that ends up inside a PDF the client reads, so we\n// escape the full set (& < > \" ') and numeric fields are forced with\n// Number() before interpolation.\nconst esc = s => String(s ?? '')\n  .replace(/&/g, '&amp;')\n  .replace(/</g, '&lt;')\n  .replace(/>/g, '&gt;')\n  .replace(/\"/g, '&quot;')\n  .replace(/'/g, '&#39;');\nconst num = v => Number.isFinite(v) ? v : 0;\n\nconst gaugePos = Math.max(0, Math.min(100, ((num(net) + 100) / 2)));\nconst donut = `conic-gradient(#e05252 0 ${p.negative}%, #b7bec4 ${p.negative}% ${p.negative+p.neutral}%, #2fae6e ${p.negative+p.neutral}% 100%)`;\nconst badge = l => ({Negative:'#e05252', Neutral:'#8d979e', Positive:'#2fae6e'}[l]);\nconst card = r => `\n  <div class=\"ccard\">\n    <span class=\"cbadge\" style=\"background:${badge(r.label)}\">${r.label}</span>\n    <span class=\"ctext\">\"${esc(r.text)}\"</span>\n    <div class=\"cbar\"><div style=\"width:${(r.score*100).toFixed(0)}%;background:${badge(r.label)}\"></div></div>\n    <span class=\"cconf\">${(r.score*100).toFixed(0)}% confidence${r.lowConf ? ' &#183; <b>ambiguous</b>' : ''}</span>\n  </div>`;\n// Cap the insight list at 5. Measured: the report overflows A4 with all of\n// them on a 5-row input, and the items past the fifth are always the most\n// conditional ones. If any were dropped, say so rather than quietly trimming.\nconst INSIGHT_CAP = 5;\nconst insightsShown = insights.slice(0, INSIGHT_CAP);\nconst droppedInsights = insights.length - insightsShown.length;\nconst insightLi = insightsShown.map(i => `<li>${i}</li>`).join('');\nconst insightDropNote = droppedInsights > 0\n  ? `<p class=\"more\">&hellip; and ${droppedInsights} further observation`\n    + `${droppedInsights > 1 ? 's' : ''} omitted for space.</p>` : '';\n// Do NOT inject our own number here. This is an <ol>, so the browser already\n// renders \"1.\" / \"2.\" for each <li>. Emitting `<b>${i+1}.</b>` as well produced\n// \"1. 1. Address the leading complaint...\" in the rendered PDF. Found by\n// screenshotting the report, not by any string assertion - see\n// agent_journal/14_visual_check.png.\nconst recLi = recs.map(r => `<li>${esc(r)}</li>`).join('');\n\n// Single timestamp used by both header and footer so they cannot disagree.\nconst REPORT_DATE = new Date().toLocaleDateString('en-PH',{timeZone:'Asia/Manila',day:'numeric',month:'long',year:'numeric'});\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>\n@page { size: A4; margin: 0; }\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: 'Segoe UI', Helvetica, Arial, sans-serif; color: #2b2f33; font-size: 10.5pt; }\n.page { width: 210mm; min-height: 297mm; padding: 8mm 12mm 6mm; }\n.header { background: linear-gradient(135deg,#1d3557 0%,#2f6b8f 100%); color: #fff;\n  border-radius: 3mm; padding: 4mm 5mm; margin-bottom: 3mm; }\n.header h1 { font-size: 16.5pt; font-weight: 700; letter-spacing: .2px; }\n.header .sub { opacity: .85; font-size: 8.5pt; margin-top: 1mm; }\n.verdict { display:inline-block; margin-top: 1.8mm; background: rgba(255,255,255,.15);\n  border: 1px solid rgba(255,255,255,.35); border-radius: 10mm; padding: .9mm 3.5mm; font-size: 8.5pt; font-weight:600; }\n.kpis { display: flex; gap: 3mm; margin: 2mm 0; }\n.kpi { flex: 1; background: #fff; border: 1px solid #e3e7ea; border-top: 3px solid #ccc;\n  border-radius: 2mm; padding: 2.2mm 2mm; text-align: center;\n  box-shadow: 0 1px 3px rgba(0,0,0,.06); }\n.kpi .v { font-size: 15pt; font-weight: 800; }\n.kpi .l { font-size: 7.5pt; color: #6a737b; text-transform: uppercase; letter-spacing: .5px; }\n.kpi.pos { border-top-color:#2fae6e; } .kpi.pos .v { color:#2fae6e; }\n.kpi.neu { border-top-color:#8d979e; } .kpi.neu .v { color:#8d979e; }\n.kpi.neg { border-top-color:#e05252; } .kpi.neg .v { color:#e05252; }\n.kpi.net { border-top-color:#1d3557; } .kpi.net .v { color:#1d3557; }\n.grid { display: flex; gap: 3.5mm; margin-bottom: 2mm; }\n.cards { display: flex; gap: 4mm; align-items: flex-start; }\n.col { flex: 1; min-width: 0; }\n.panel { background:#fff; border:1px solid #e3e7ea; border-radius:2.5mm; padding: 3mm; }\n.panel h2 { font-size: 10pt; color:#1d3557; margin-bottom: 2mm; }\n.donut-wrap { display:flex; align-items:center; gap:5mm; }\n.donut { width: 30mm; height: 30mm; border-radius: 50%; position: relative; flex-shrink:0; }\n.donut .hole { position:absolute; inset: 6mm; background:#fff; border-radius:50%;\n  display:flex; flex-direction:column; align-items:center; justify-content:center; }\n.donut .hole .big { font-size: 11.5pt; font-weight: 800; color:#1d3557; line-height:1.05; }\n/* The caption must fit INSIDE the hole. At 30mm donut / 6mm inset the hole is\n   18mm across; \"NET SCORE\" at 6.5pt is wider than that and overflowed onto the\n   coloured ring. 5.5pt plus no letter-spacing fits with ~2mm to spare. */\n.donut .hole .small { font-size: 5.5pt; color:#8d979e; letter-spacing: 0; }\n.legend div { margin-bottom: 1.2mm; font-size: 8.5pt; }\n.dot { display:inline-block; width: 3mm; height: 3mm; border-radius: 50%; margin-right: 2mm; vertical-align: -0.3mm; }\n.stack { height: 7mm; border-radius: 2mm; overflow: hidden; display: flex; margin: 2mm 0 1.5mm; }\n.stack div { height: 100%; }\n.stacklabels { display:flex; justify-content: space-between; font-size: 8pt; color:#6a737b; }\n.gauge { position: relative; height: 5mm; border-radius: 2.5mm; margin-top: 1.5mm;\n  background: linear-gradient(90deg,#e05252 0%,#d9b23a 45%,#d9b23a 55%,#2fae6e 100%); }\n.gauge .marker { position: absolute; top: -1.5mm; width: 1.6mm; height: 9mm; background:#1d3557;\n  border-radius: 1mm; left: calc(${gaugePos}% - 0.8mm); }\n.gauge-labels { display:flex; justify-content:space-between; font-size:7.5pt; color:#8d979e; margin-top:1mm; }\nul.insights { list-style: none; }\nul.insights li { padding: 1.5mm 0 1.5mm 5mm; position: relative; border-bottom: 1px dashed #eceff1; font-size: 9.2pt; line-height: 1.35; }\nul.insights li:before { content: \"▸\"; position: absolute; left: 0; color: #2f6b8f; }\nul.insights li:last-child { border-bottom: none; }\nol.recs { padding-left: 4.5mm; }\nol.recs li { margin-bottom: 1.3mm; font-size: 9.2pt; line-height: 1.35; }\n.ccard { border: 1px solid #e9edf0; border-left: 3px solid #ccc; border-radius: 2mm;\n  padding: 1.8mm 2.5mm; margin-bottom: 1.8mm; background: #fbfcfd; }\n.cbadge { color:#fff; font-size: 7.2pt; font-weight:700; border-radius: 8mm; padding: .7mm 2.4mm; }\n.ctext { display:block; font-size: 9pt; margin: 1mm 0; font-style: italic; color:#39424a; line-height:1.3; }\n.cbar { height: 1.3mm; background:#eef1f3; border-radius: .7mm; overflow: hidden; }\n.cbar div { height: 100%; border-radius: 1mm; }\n.cconf { font-size: 7.2pt; color:#9aa4ac; display:block; margin-top: .8mm; }\np.more { font-size: 7.5pt; color:#8d979e; font-style: italic; margin: 0 0 .6mm; }\nh3.sec { font-size: 10pt; color:#1d3557; margin: 2mm 0 1.2mm; border-left: 3px solid #2f6b8f; padding-left: 2mm; }\n.footer { margin-top: 3mm; padding-top: 2mm; border-top: 1px solid #e6eaed;\n  font-size: 7pt; color: #9aa4ac; display:flex; justify-content: space-between; }\n</style></head><body><div class=\"page\">\n\n<div class=\"header\">\n  <h1>Review Pulso - Sentiment Report</h1>\n  <div class=\"sub\"><b>${esc(meta.business_name)}</b>${meta.context ? ' &middot; ' + esc(meta.context) : ''} &middot; ${n} reviews analyzed &middot; ${esc(REPORT_DATE)}</div>\n  <div class=\"verdict\">${esc(verdict)}</div>\n</div>\n\n<div class=\"kpis\">\n  <div class=\"kpi pos\"><div class=\"v\">${p.positive}%</div><div class=\"l\">Positive</div></div>\n  <div class=\"kpi neu\"><div class=\"v\">${p.neutral}%</div><div class=\"l\">Neutral</div></div>\n  <div class=\"kpi neg\"><div class=\"v\">${p.negative}%</div><div class=\"l\">Negative</div></div>\n  <div class=\"kpi net\"><div class=\"v\">${net}</div><div class=\"l\">Net score</div></div>\n</div>\n\n<div class=\"grid\">\n  <div class=\"col panel\">\n    <h2>Sentiment mix</h2>\n    <div class=\"donut-wrap\">\n      <div class=\"donut\" style=\"background:${donut}\">\n        <div class=\"hole\"><div class=\"big\">${net}</div><div class=\"small\">NET SCORE</div></div>\n      </div>\n      <div class=\"legend\">\n        <div><span class=\"dot\" style=\"background:#2fae6e\"></span>Positive ${p.positive}%</div>\n        <div><span class=\"dot\" style=\"background:#b7bec4\"></span>Neutral ${p.neutral}%</div>\n        <div><span class=\"dot\" style=\"background:#e05252\"></span>Negative ${p.negative}%</div>\n      </div>\n    </div>\n    <div class=\"stack\">\n      <div style=\"width:${p.positive}%;background:#2fae6e\"></div>\n      <div style=\"width:${p.neutral}%;background:#b7bec4\"></div>\n      <div style=\"width:${p.negative}%;background:#e05252\"></div>\n    </div>\n    <div class=\"stacklabels\"><span>&#9650; positive</span><span>negative &#9660;</span></div>\n  </div>\n  <div class=\"col panel\">\n    <h2>Net sentiment gauge</h2>\n    <div class=\"gauge\"><div class=\"marker\"></div></div>\n    <div class=\"gauge-labels\"><span>-100 (all negative)</span><span>0</span><span>+100 (all positive)</span></div>\n    <h2 style=\"margin-top:4mm\">Key insights</h2>\n    <ul class=\"insights\">${insightLi}</ul>\n    ${insightDropNote}\n  </div>\n</div>\n\n<!-- The two card groups sit SIDE BY SIDE, not stacked. Stacked, six cards\n     cost ~6 x 21mm of vertical space and pushed the report past one A4 page;\n     the only way to recover it was to shrink the body type to 8.2pt, which\n     is too small to read comfortably in print. Two columns cost ~3 x 21mm\n     instead, which leaves enough room for 9.5pt text.\n     Measured: this is the difference between a cramped report and a\n     readable one. See agent_journal/13_fit_one_page.py. -->\n<div class=\"cards\">\n  <div class=\"col\">\n    <h3 class=\"sec\">&#9888;&#65039; Needs attention - top negative reviews</h3>\n    ${top('Negative').map(card).join('') || '<p style=\"color:#8d979e\">No negative reviews in this batch.</p>'}\n    ${moreNote('Negative', hidden('Negative'))}\n  </div>\n  <div class=\"col\">\n    <h3 class=\"sec\">&#128154; What\\'s working - top positive reviews</h3>\n    ${top('Positive').map(card).join('') || '<p style=\"color:#8d979e\">No positive reviews in this batch.</p>'}\n    ${moreNote('Positive', hidden('Positive'))}\n  </div>\n</div>\n\n<h3 class=\"sec\">Recommended actions</h3>\n<ol class=\"recs\">${recLi}</ol>\n\n<div class=\"footer\">\n  <span>Powered by <b>TagaSenti</b> &middot; Apache 2.0 &middot; DOI 10.57967/hf/9620</span>\n  <span>Generated by Review Pulso v1.3</span>\n</div>\n\n</div></body></html>`;\n\n// The binary MUST be named index.html - Gotenberg's HTML route requires that\n// exact filename, otherwise it 400s with \"at least one HTML file expected\".\nreturn [{ json: {\n    stats: { total: n, pct: p, net_score: net, counts, low_confidence: lowConfCount },\n    insights,\n    verdict,\n    business_name: meta.business_name,\n  },\n  binary: { data: await this.helpers.prepareBinaryData(\n    Buffer.from(html, 'utf-8'), 'index.html', 'text/html') } }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "a1000000-0000-4000-8000-000000000005",
+      "name": "Node 5",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        300
+      ],
+      "notes": "CORRECTION 4: full HTML escaping (& < > \" ') because review text is untrusted input rendered into a PDF; the doc's esc() only escaped & and <. Also adds an explicit length-mismatch guard, a LOW-CONFIDENCE band for ambiguous reviews, and a single shared report date. Binary is named index.html - Gotenberg requires that exact filename."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gotenberg:3000/forms/chromium/convert/html",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Gotenberg-Output-Filename",
+              "value": "review-pulso-report.pdf"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "files",
+              "inputDataFieldName": "data"
+            },
+            {
+              "parameterType": "formData",
+              "name": "printBackground",
+              "value": "true"
+            },
+            {
+              "parameterType": "formData",
+              "name": "preferCssPageSize",
+              "value": "true"
+            },
+            {
+              "parameterType": "formData",
+              "name": "paperWidth",
+              "value": "8.27"
+            },
+            {
+              "parameterType": "formData",
+              "name": "paperHeight",
+              "value": "11.69"
+            },
+            {
+              "parameterType": "formData",
+              "name": "marginTop",
+              "value": "0"
+            },
+            {
+              "parameterType": "formData",
+              "name": "marginBottom",
+              "value": "0"
+            },
+            {
+              "parameterType": "formData",
+              "name": "marginLeft",
+              "value": "0"
+            },
+            {
+              "parameterType": "formData",
+              "name": "marginRight",
+              "value": "0"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000006",
+      "name": "Node 6",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1420,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "CORRECTION 2: preferCssPageSize=true is essential - without it Gotenberg defaults to LETTER and ignores the CSS @page A4 rule, clipping the 210mm page. printBackground=true is essential for the donut/gauge/gradient. Output binary field is 'data'."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build a filesystem-safe output name from client-controlled input, and\n// emit the PDF plus a JSON sidecar carrying the full statistics.\n//\n// WHY THIS NODE EXISTS\n// The PDF now lands in a folder on the operator's disk instead of Telegram,\n// so the filename is derived from `business_name` - a field the CLIENT\n// CONTROLS. Without sanitising it, a value like `../../etc/cron.d/x` would be\n// a path-traversal escape out of the downloads directory.\n//\n// Order matters: Node 5's stats are read from that node by name, and the\n// binary from Node 6 (the PDF) is passed through untouched.\n\n// ---- slugify ------------------------------------------------------------\n// Reduce to [a-z0-9-]. After this function it is STRUCTURALLY IMPOSSIBLE for\n// the value to contain a path separator, a dot-segment, or a null byte.\nconst slug = (raw) => {\n  let s = String(raw ?? '')\n    .normalize('NFKD')                      // split accented chars into base + mark\n    .replace(/[\\u0300-\\u036f]/g, '')        // drop the combining marks\n    .toLowerCase()\n    .replace(/[^a-z0-9]+/g, '-')            // everything else becomes a dash\n    .replace(/^-+|-+$/g, '');               // trim leading/trailing dashes\n  s = s.slice(0, 40).replace(/-+$/, '');     // cap length, re-trim after capping\n  return s || 'unnamed-business';\n};\n\nconst stats  = $('Node 5').first().json;\nconst meta   = $('Node 3').first().json;\n// CORRECTION: same as Node 3 - a Webhook nests the submitted fields under\n// .body, a Form Trigger does not. Read whichever is present.\nconst rawForm = $('Node 1').first().json;\nconst form   = (rawForm && rawForm.body && typeof rawForm.body === 'object')\n  ? rawForm.body : rawForm;\n\nconst business = slug(form.business_name || meta.business_name);\n\n// UTC timestamp, compact and sortable. YYYYMMDD-HHMMSS.\n// UTC rather than Asia/Manila so the name is unambiguous wherever it is\n// opened, and so it cannot be ambiguous across a DST-style clock change.\nconst now = new Date();\nconst pad = (n) => String(n).padStart(2, '0');\nconst stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}`\n            + `${pad(now.getUTCDate())}-${pad(now.getUTCHours())}`\n            + `${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;\n\nconst p = stats.stats.pct;\nconst base = `review-pulso__${business}__${stamp}`\n           + `__n${stats.stats.total}`\n           + `__pos${p.positive}__neu${p.neutral}__neg${p.negative}`\n           + `__net${stats.stats.net_score}`;\n\n// ASSERTION. The slug above already makes traversal impossible; this is the\n// second lock. If someone later \"simplifies\" the slug function, this fails\n// loudly rather than writing outside the downloads directory.\nconst SAFE = /^[A-Za-z0-9._-]{1,180}$/;\nif (!SAFE.test(base) || base.includes('..')) {\n  throw new Error(\n    `Refusing to write: generated filename \"${base}\" failed the safety check. `\n    + `This is a bug in the slug function, not in your data.`\n  );\n}\n\nconst pdfName    = `downloads/${base}.pdf`;\nconst manifestName = `downloads/${base}.json`;\n\n// The sidecar carries what a human would otherwise have to open the PDF to\n// learn: the exact counts, net score, verdict, ambiguity count and the full\n// insight list. Deliberately does NOT include the review text, so the folder\n// does not become a second copy of customer data.\nconst manifest = {\n  business_name: form.business_name || meta.business_name,\n  context: meta.context || '',\n  generated_at_utc: now.toISOString(),\n  total_reviews: stats.stats.total,\n  counts: stats.stats.counts,\n  percentages: p,\n  net_score: stats.stats.net_score,\n  verdict: stats.verdict,\n  low_confidence_reviews: stats.stats.low_confidence,\n  insights: stats.insights,\n  pdf_filename: base + '.pdf',\n  model: 'TagaSenti v4 (Apache-2.0, DOI 10.57967/hf/9620)',\n};\n\n// Pass the PDF binary through untouched, and add the manifest as a second\n// binary field.\nreturn [{\n  json: {\n    pdf_filename: base + '.pdf',\n    manifest_filename: base + '.json',\n    writes: [pdfName, manifestName],\n    // The full stats object is carried through, not just three scalars.\n    // The Respond to Webhook node at the end of the chain reads $json.stats,\n    // and it previously did not exist here - so the final node threw and the\n    // whole run failed with \"Error in workflow\" even though the PDF had\n    // already been written. Carrying the object is what makes the two nodes\n    // agree.\n    stats: stats.stats,\n    business_name: form.business_name || meta.business_name,\n    total: stats.stats.total,\n    net_score: stats.stats.net_score,\n    verdict: stats.verdict,\n  },\n  // Pass the PDF (from Node 6) through to Node 8.\n  //\n  // THIS ONLY WORKS WITH n8n's DEFAULT in-memory binary mode. With\n  // N8N_DEFAULT_BINARY_DATA_MODE=filesystem, a binary is not inline base64\n  // but an id into n8n's binary store, and passing such a reference through a\n  // Code node's returned binary map does not reliably survive - the node\n  // drops it and Node 8 fails with \"The item has no binary field 'data'\".\n  //\n  // The filesystem mode was removed from docker-compose.yml for this reason.\n  // Do not re-add it without re-testing Node 7 -> Node 8. The payloads are a\n  // ~10KB CSV and a ~120KB PDF, so in-memory costs nothing here.\n  binary: {\n    data: items[0].binary.data,                     // the PDF from Node 6\n  },\n}];",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "a1000000-0000-4000-8000-000000000007",
+      "name": "Node 7 - Filename",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1660,
+        300
+      ],
+      "notes": "SECURITY: builds the output filename from client-controlled business_name. Slugified to [a-z0-9-] (so '/' and '..' cannot survive) AND then asserted against a strict allowlist regex. If you edit the slug function, keep the assertion. Also passes the PDF binary through and adds a JSON sidecar."
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=/home/node/.n8n-files/downloads/{{ $('Node 7 - Filename').first().json.pdf_filename }}",
+        "inputDataFieldName": "data",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000008",
+      "name": "Node 8 - Save PDF",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        1900,
+        220
+      ],
+      "notes": "Writes the PDF into the host downloads folder. NOTE: the path resolution here (relative to N8N_USER_FOLDER) is the one part of this delivery path NOT verified by execution, because it needs a running n8n. Verify the file appears, and check the n8n log for the resolved absolute path, before trusting it."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: true, message: 'Report generated and saved to the download folder.', business_name: $json.business_name, pdf: $json.pdf_filename, reviews: $json.stats.total, net_score: $json.stats.net_score, verdict: $json.verdict, low_confidence_reviews: $json.stats.low_confidence } }}",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-00000000000a",
+      "name": "Node 1b - Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2140,
+        300
+      ],
+      "notes": "Returns 200 with the output filename once the run has completed. The browser treats this as 'accepted'; the PDF itself lands in the download folder rather than being returned over HTTP."
+    }
+  ],
+  "connections": {
+    "Node 1": {
+      "main": [
+        [
+          {
+            "node": "Node 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Node 2": {
+      "main": [
+        [
+          {
+            "node": "Node 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Node 3": {
+      "main": [
+        [
+          {
+            "node": "Node 4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Node 4": {
+      "main": [
+        [
+          {
+            "node": "Node 5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Node 5": {
+      "main": [
+        [
+          {
+            "node": "Node 6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Node 6": {
+      "main": [
+        [
+          {
+            "node": "Node 7 - Filename",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Node 7 - Filename": {
+      "main": [
+        [
+          {
+            "node": "Node 8 - Save PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Node 8 - Save PDF": {
+      "main": [
+        [
+          {
+            "node": "Node 1b - Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 900000
+  },
+  "staticData": null,
+  "pinData": {},
+  "active": false,
+  "versionId": "1.3.0",
+  "meta": {
+    "instanceId": "review-pulso-local"
+  },
+  "tags": []
+}

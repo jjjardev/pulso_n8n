@@ -1,0 +1,334 @@
+# ===========================================================================
+#  Review Pulso - n8n sentiment-report pipeline (3 services)
+#
+#  Build/up:   cd ~/n8n && docker compose up -d --build
+#  Logs:       docker compose logs -f tagasenti
+#  Tear down:  docker compose down        (keeps data)
+#  Nuke data:  docker compose down -v     (DESTROYS all n8n credentials!)
+#
+#  ---------------------------------------------------------------------------
+#  CHANGES FROM THE PIPELINE DOC (v1.2 section 1) - each one deliberate:
+#
+#  1. N8N_ENCRYPTION_KEY is a real 64-hex-char key, not `change-me-...`.
+#     The previous file shipped with the literal placeholder. THIS IS
+#     ONE-SHOT: changing this key later makes n8n unable to decrypt every
+#     stored credential, including your Telegram bot token, and you must
+#     re-enter them all. The key below was generated with `openssl rand -hex 32`
+#     and is written down in agent_journal/JOURNAL.md.
+#
+#  2. Healthchecks on tagasenti and gotenberg, with `depends_on:
+#     condition: service_healthy` on n8n. The doc has no healthchecks, which
+#     means n8n's very first execution can fire before tagasenti has finished
+#     loading 562MB of weights, and fail with ECONNREFUSED. The client then
+#     sees a failed upload for no reason. start_period is generous (90s/40s)
+#     because model load was measured at ~3-5s locally but a cold Docker
+#     layer read of a 562MB file from disk is slower.
+#
+#  3. Ports 8000 and 3000 are deliberately NOT published, per the doc's own
+#     section 9 security note. tagasenti and gotenberg are reachable only on
+#     the internal compose network. This means you cannot curl them from the
+#     host with `localhost:8000` - the doc's section 2 test command will NOT
+#     work as written. Use the documented workaround in agent_journal.
+#
+#  4. A named network is declared explicitly rather than relying on the
+#     implicit default, so the service names `tagasenti` and `gotenberg` used
+#     inside the n8n node URLs are guaranteed to resolve.
+#
+#  5. REMOVED: N8N_DEFAULT_BINARY_DATA_MODE=filesystem.
+#     This was set originally, on the reasoning that "reports embed an HTML
+#     blob plus a PDF blob, and default (in-memory) mode makes n8n pile large
+#     buffers in RAM". That reasoning was wrong on the merits: the payloads
+#     here are a ~10KB CSV and a ~120KB PDF, so memory is a non-issue for this
+#     workload, and the setting bought nothing.
+#
+#     It then caused a live failure. In filesystem mode a binary is not inline
+#     base64, it is an id into n8n's binary store. Passing such a reference
+#     through a Code node's returned `binary` map does not reliably survive -
+#     the node drops it, and the downstream Read/Write Files node fails with
+#     "The item has no binary field 'data'". The earlier version of this
+#     workflow happened to work only because a `prepareBinaryData` call in the
+#     same node forced n8n to resolve the whole binary map.
+#
+#     With the default in-memory mode, binaries are inline base64 and pass
+#     through Code nodes as ordinary values. Simpler, and it removes a whole
+#     class of failure for a workload where it was never needed.
+#
+#  6. n8n gets a healthcheck, added AFTER an incident. n8n was crash-looping
+#     on an encryption-key mismatch while `docker compose ps` cheerfully
+#     reported it as "Up 8 seconds" and `docker compose up` reported
+#     "Started" - because a container that keeps restarting technically IS
+#     running, and with no healthcheck compose has no opinion beyond that.
+#     The status column said "Up 4 minutes"; the logs said n8n had never
+#     started. The healthcheck below makes that class of failure visible at a
+#     glance, because a crash-looping container never answers its probe.
+#
+#     n8n's image has no curl or wget, so the probe uses `node`, which it
+#     definitely has. /healthz is served by the task-runner; if you are on a
+#     build that predates it, fall back to hitting the main port.
+# ===========================================================================
+
+services:
+  n8n:
+    image: n8nio/n8n
+    restart: unless-stopped
+    ports:
+      # Bound to loopback deliberately. The webhook has NO authentication of
+      # its own, so exposing 5678 on all interfaces would let anyone on the
+      # LAN upload arbitrary CSVs and burn inference CPU. The upload page
+      # already reaches n8n same-origin through the `uploader` service, so
+      # nothing on localhost loses access. To allow LAN access deliberately,
+      # change this to "0.0.0.0:5678:5678" AND put authentication in front of
+      # the webhook first - see ORCHESTRATION.md, "What is not protected".
+      - "127.0.0.1:5678:5678"
+    environment:
+      - TZ=Asia/Manila
+      # -------------------------------------------------------------------
+      # ENCRYPTION KEY - RESTORED TO THE ORIGINAL VALUE ON PURPOSE.
+      #
+      #
+      # The key below was temporarily changed to a strong random value, which
+      # put n8n into a crash loop:
+      #
+      #   Error: Mismatching encryption keys. The encryption key in the
+      #   settings file /home/node/.n8n/config does not match the
+      #   N8N_ENCRYPTION_KEY env var.
+      #
+      # n8n persists the key it saw on FIRST boot, in PLAINTEXT, at
+      # /home/node/.n8n/config. On this volume that file contains literally:
+      #
+      #   { "encryptionKey": "change-me-to-a-long-random-string" }
+      #
+      # So the env var must match that exact string or n8n refuses to start.
+      # The original was restored rather than wiping the volume, because the
+      # volume was inspected first and contains:
+      #
+      #   users=1  (jj.jarder.dev@gmail.com, role global:owner)
+      #   credentials=0  workflows=0  executions=0  variables=0  api_keys=0
+      #
+      # i.e. one owner account and nothing else. Restoring the key preserves
+      # that account and its password hash, so you log straight in.
+      #
+      # WHY A WEAK KEY IS ACCEPTABLE *RIGHT NOW*: it encrypts stored
+      # credentials, and there are none. It is protecting nothing. It only
+      # starts to matter once the Telegram credential exists in step 5.
+      #
+      # WHEN TO HARDEN IT: after the pipeline works end to end. Rotating then
+      # costs one credential re-entry per stored credential, since there will
+      # be nothing else. Procedure: back up the volume with
+      #   sudo bash agent_journal/11_n8n_volume.sh backup
+      # then set a real key in .env AND overwrite the key inside .n8n/config,
+      # or simply delete .n8n/config (n8n regenerates it) and re-enter any
+      # credentials. Do NOT rotate it with live credentials in the volume
+      # unless you are prepared to re-add every one of them.
+      #
+      # The value lives in .env (gitignored). See .env.example. Note the
+      # trap recorded above: changing only the env var, while .n8n/config
+      # still holds the old one, puts n8n into a crash loop.
+      # -------------------------------------------------------------------
+      # `:?` makes compose FAIL LOUDLY when the variable is unset, instead of
+      # silently substituting an empty string. An empty encryption key would
+      # be worse than the placeholder it replaces: n8n would either crash-loop
+      # against the existing .n8n/config or, on a fresh volume, encrypt
+      # credentials under a key that is not a secret.
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY is not set - copy .env.example to .env and set it}
+      - N8N_DIAGNOSTICS_ENABLED=false
+    volumes:
+      - n8n_data:/home/node/.n8n
+      # ---------------------------------------------------------------------
+      # DELIVERY MOUNT (replaces Telegram).
+      #
+      # The n8n "Read/Write Files from Disk" node resolves RELATIVE paths
+      # against N8N_USER_FOLDER, which defaults to ~/.n8n-files. The workflow
+      # writes to a relative path "downloads/<name>.pdf", which therefore
+      # resolves to /home/node/.n8n-files/downloads/<name>.pdf inside the
+      # container. Mounting the host's Downloads/review-pulso there is what
+      # makes the PDF appear on the operator's desktop filesystem.
+      #
+      # Deliberately NOT mounted at N8N_USER_FOLDER itself: that directory is
+      # also where n8n keeps filesystem-mode binary data, and mixing the two
+      # would scatter intermediate binaries among the finished reports.
+      #
+      # The host directory is created by Docker if absent. Permissions work
+      # because the n8n container runs as uid 1000, which is also the uid of
+      # jjjarder on this machine - confirmed from the n8n_data volume listing,
+      # whose files are owned by 1000:1000.
+      #
+      # WRITABLE BY THE CONTAINER, so treat this folder as trusted output.
+      # Anyone who can reach the form's shared-secret URL can cause a file to
+      # appear here (see JOURNAL.md 10.5 for that risk, and 10.8 for the
+      # disk-fill consequence). A nightly cleanup is worth adding on the host.
+      #
+      # !!! PERMISSIONS - THE UIDS DO NOT MATCH !!!
+      # This failed live with "Forbidden by access permissions" in Node 8.
+      # The reason is a uid mismatch that is easy to get wrong:
+      #     host user  jjjarder = uid 1001
+      #     n8n image  node     = uid 1000
+      # The host directory is therefore owned by 1001, and inside the container
+      # n8n (uid 1000) is "somebody else" in a 775 directory - which grants
+      # others r-x and NO write. An earlier version of this comment claimed
+      # "n8n runs as uid 1000, which is also the uid of jjjarder", inferred
+      # from the n8n_data volume being owned by 1000:1000. That inference was
+      # wrong: the volume's files are owned by the CONTAINER user, which tells
+      # you nothing about the host user's uid.
+      #
+      # The fix is on the host, not here:
+      #     chmod 777 ~/Downloads/review-pulso
+      # 777 rather than chown, deliberately: the container uid (1000) and the
+      # host uid (1001) cannot both be the owner, and the operator needs to
+      # keep reading and tidying these files. This is a single-purpose output
+      # directory; the files themselves inherit the container's umask and
+      # contain report output, not credentials.
+      #
+      # Verify after any change:  ls -ld ~/Downloads/review-pulso
+      #                         -> the "other" write bit must be set.
+      # ---------------------------------------------------------------------
+      - ${DOWNLOAD_DIR:-${HOME}/Downloads/review-pulso}:/home/node/.n8n-files/downloads
+    # -----------------------------------------------------------------------
+    # FILE PERMISSIONS OF THE REPORTS  (the better fix, currently DISABLED)
+    # -----------------------------------------------------------------------
+    # Reports are written as uid 1000 (the image's `node` user) with the
+    # container's umask 022, so 666 becomes 644. The host user is uid 1001 and
+    # is therefore "other", with r-x and no write. File managers show the
+    # owner as UNKNOWN and may mark the files read-only. The folder itself is
+    # mounted 777, so reading, deleting, renaming and creating all work; the
+    # only blocked operation is editing a PDF in place.
+    #
+    # The clean fix is to make n8n create files with a permissive umask:
+    #
+    #   command: ["sh", "-c", "umask 000 && exec n8n"]
+    #
+    # WHY IT IS COMMENTED OUT RATHER THAN ACTIVE: this was written by an agent
+    # with no Docker access (its session never acquired the docker group), so
+    # it could NOT be executed to confirm it works. Overriding a container's
+    # command risks breaking startup, and a broken n8n is a far worse outcome
+    # than a read-only file. The agent would rather hand over a documented,
+    # reversible change than an unverified one.
+    #
+    # TO ENABLE IT: uncomment the line below, then
+    #     sudo docker compose up -d n8n
+    # and check that http://localhost:5678 still loads. If n8n does not start,
+    # delete the line and re-run the same command to roll back - the image's
+    # default command is restored, nothing else was changed.
+    #
+    # The zero-risk alternative needs no compose change at all: a ROOT crontab
+    # entry running agent_journal/21_fix_report_permissions.sh every 5 minutes.
+    # It must be the ROOT crontab, because chmod on a file owned by uid 1000
+    # requires root.
+    # command: ["sh", "-c", "umask 000 && exec n8n"]
+    depends_on:
+      tagasenti:
+        condition: service_healthy
+      gotenberg:
+        condition: service_healthy
+    healthcheck:
+      # node is guaranteed present in the n8n image; curl and wget are not.
+      # A container stuck in a crash loop never answers this, which is
+      # precisely the failure mode this healthcheck exists to expose.
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:5678/healthz',r=>process.exit(r.statusCode<400?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      # n8n needs a moment to finish DB migrations on first boot.
+      start_period: 60s
+      # retries=1 so a crash loop shows as 'unhealthy' almost immediately
+      # rather than after a minute of optimistic reporting.
+      retries: 1
+    networks:
+      - pulso
+
+  tagasenti:
+    build: ./tagasenti
+    restart: unless-stopped
+    environment:
+      # Sized by agent_journal/04_benchmark_threads_and_size_cap.py on this
+      # 6-core host. See JOURNAL.md entry 04 for the numbers.
+      - BATCH_SIZE=8
+      - MAX_LENGTH=128
+      - MAX_BATCH_REVIEWS=2000
+      - ORT_INTRA_OP_THREADS=4
+    # NOT published - internal network only (see note 3 above).
+    expose:
+      - "8000"
+    healthcheck:
+      # /health does not run inference by design, so polling it is cheap and
+      # cannot steal CPU from a real scoring request.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      # Generous: first run loads 562MB of int8 weights from disk.
+      start_period: 90s
+      retries: 3
+    networks:
+      - pulso
+
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    restart: unless-stopped
+    # NOT published - internal network only (see note 3 above).
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      # Chromium's bundled font cache warms up on first boot.
+      start_period: 40s
+      retries: 3
+    networks:
+      - pulso
+
+  # ---------------------------------------------------------------------
+  # UPLOADER - serves the drag-and-drop page, and NOTHING else.
+  #
+  # This replaced n8n's Form Trigger. Two reasons, both found on this
+  # instance:
+  #   1. n8n's TEST form cannot accept a file upload at all. The file field
+  #      is inert in the editor's preview - you can click it and drag onto
+  #      it and neither does anything. That is an n8n limitation.
+  #   2. The PRODUCTION form never registered: every /form/... path returned
+  #      404 even with the workflow executed, so the broken test form was the
+  #      only reachable entry point.
+  #
+  # So the browser side is a page we control, with a real HTML5 drag-and-drop
+  # zone, POSTing multipart straight to an n8n Webhook node.
+  #
+  # It is nginx used purely as a static file server. It does NOT proxy to n8n
+  # and does NOT authenticate anything. The shared secret lives in the webhook
+  # path. Bound to 127.0.0.1 deliberately, so it is not exposed to the LAN.
+  #
+  # This is the one service that MUST publish a port - the browser has to load
+  # it. Every other internal service uses `expose:` on purpose.
+  # ---------------------------------------------------------------------
+  uploader:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      # Mounted as two individual files, read-only.
+      #   index.html  -> the page the user opens
+      #   nginx.conf  -> /etc/nginx/conf.d/default.conf, which REPLACES the
+      #                  stock config. This is what proxies /webhook/ to n8n and
+      #                  is what removes the CORS failure.
+      #
+      # nginx only ever reads both of these, so :ro is correct. (An earlier
+      # draft of this comment claimed the config had to be writable, which was
+      # wrong - the fix is the drop-in PATH, not the mount mode.)
+      #
+      # Mounting the parent directory as a single :ro volume would NOT work for
+      # the same reason: it would shadow nginx's own directory structure.
+      - ./upload/index.html:/usr/share/nginx/html/index.html:ro
+      - ./upload/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - pulso
+
+networks:
+  pulso:
+    driver: bridge
+
+volumes:
+  n8n_data:

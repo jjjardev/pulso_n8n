@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review Pulso — Upload reviews</title>
+<style>
+  :root {
+    --ink: #2b2f33; --muted: #6a737b; --line: #e3e7ea;
+    --brand: #1d3557; --brand2: #2f6b8f; --ok: #2fae6e; --bad: #e05252;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    color: var(--ink); background: #f4f6f8; line-height: 1.5;
+    min-height: 100vh; display: flex; align-items: flex-start;
+    justify-content: center; padding: 32px 16px;
+  }
+  .wrap { width: 100%; max-width: 720px; }
+
+  header {
+    background: linear-gradient(135deg, var(--brand) 0%, var(--brand2) 100%);
+    color: #fff; border-radius: 8px; padding: 22px 24px; margin-bottom: 20px;
+  }
+  header h1 { font-size: 22px; font-weight: 700; letter-spacing: .2px; }
+  header p { opacity: .88; font-size: 14px; margin-top: 6px; }
+
+  .card {
+    background: #fff; border: 1px solid var(--line); border-radius: 8px;
+    padding: 20px 24px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px;
+    color: var(--muted); margin-bottom: 12px; }
+
+  /* ---- the drop zone ---- */
+  #drop {
+    border: 2px dashed #b7bec4; border-radius: 8px; padding: 34px 20px;
+    text-align: center; cursor: pointer; background: #fbfcfd;
+    transition: background .12s, border-color .12s, transform .12s;
+  }
+  #drop:hover { border-color: var(--brand2); background: #f7fafc; }
+  /* The whole zone reacts while a file is dragged over it. This is the entire
+     point of building our own page: n8n's form field gives us no such hook. */
+  #drop.over {
+    border-color: var(--brand2); background: #eef4f8; transform: scale(1.01);
+  }
+  #drop.over .icon { transform: scale(1.25) translateY(-3px); }
+  #drop .icon { font-size: 40px; line-height: 1; transition: transform .12s; }
+  #drop .big { font-size: 16px; font-weight: 600; margin-top: 10px; }
+  #drop .small { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+  /* ---- inputs ---- */
+  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; }
+  input[type=text], textarea {
+    width: 100%; padding: 9px 11px; border: 1px solid #cfd6da;
+    border-radius: 5px; font: inherit; font-size: 14px; background: #fff;
+  }
+  input[type=text]:focus, textarea:focus {
+    outline: none; border-color: var(--brand2);
+    box-shadow: 0 0 0 3px rgba(47,107,143,.15);
+  }
+  .field { margin-bottom: 14px; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  button {
+    width: 100%; padding: 12px; border: 0; border-radius: 6px;
+    background: var(--brand); color: #fff; font: inherit; font-size: 15px;
+    font-weight: 600; cursor: pointer; transition: background .12s;
+  }
+  button:hover:not(:disabled) { background: var(--brand2); }
+  button:disabled { background: #b7bec4; cursor: not-allowed; }
+
+  /* ---- status ---- */
+  #status { display: none; margin-top: 16px; padding: 14px 16px;
+    border-radius: 6px; font-size: 14px; }
+  #status.show { display: block; }
+  #status.working { background: #eef4f8; color: var(--brand); }
+  #status.ok { background: #e8f6ee; color: #1d6b42; }
+  #status.err { background: #fdecec; color: #9a2b2b; }
+  #status .sub { font-size: 13px; margin-top: 6px; color: inherit; opacity: .85; }
+
+  /* Progress bar for the POST, which is instant (upload only). The slow part
+     is the n8n execution, which is reported separately. */
+  #bar { height: 4px; background: #dfe5e9; border-radius: 2px; overflow: hidden;
+    margin-top: 10px; display: none; }
+  #bar.show { display: block; }
+  #bar > div { height: 100%; width: 0; background: var(--brand2); transition: width .2s; }
+
+  .fileinfo {
+    font-size: 13px; background: #f0f4f7; border-radius: 5px;
+    padding: 9px 12px; margin-top: 12px; display: none;
+  }
+  .fileinfo.show { display: block; }
+  footer { font-size: 12px; color: var(--muted); text-align: center; margin-top: 18px; }
+  code { background: #eef1f3; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Review Pulso — Filipino Sentiment Report</h1>
+    <p>Upload a CSV of customer reviews, one review per row. Your report is
+       generated as a PDF and saved to the server.</p>
+  </header>
+
+  <div class="card">
+    <h2>1 &nbsp;Your reviews (CSV)</h2>
+    <!-- The input is kept visually hidden but MUST stay in the DOM and must
+         NOT be display:none — some browsers refuse to open a file chooser for
+         a hidden input, and Safari/iOS will not fire the change event at all.
+         opacity:0 + absolute positioning keeps it clickable everywhere. -->
+    <input type="file" id="file" accept=".csv,text/csv" style="
+        position:absolute; width:1px; height:1px; opacity:0; overflow:hidden;
+        z-index:-1;">
+    <div id="drop" role="button" tabindex="0" aria-label="Choose or drop a CSV file">
+      <div class="icon">&#128196;</div>
+      <div class="big">Drag your CSV here</div>
+      <div class="small">or click to choose a file &middot; <code>.csv</code> up to 1000 rows</div>
+    </div>
+    <div class="fileinfo" id="fileinfo"></div>
+    <div class="hint">The CSV needs a column named <code>review</code>,
+      <code>text</code>, <code>comment</code>, <code>content</code> or
+      <code>feedback</code>. Commas inside a quoted review are handled.</div>
+  </div>
+
+  <div class="card">
+    <h2>2 &nbsp;About the business</h2>
+    <div class="field">
+      <label for="business">Business name</label>
+      <input type="text" id="business" placeholder="e.g. SariSari Store Malate" required>
+    </div>
+    <div class="field">
+      <label for="context">Context <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+      <input type="text" id="context" placeholder="e.g. Q3 2026, Shopee + Google Maps">
+    </div>
+  </div>
+
+  <div class="card">
+    <button id="go" disabled>Generate report</button>
+    <div id="bar"><div></div></div>
+    <div id="status"></div>
+  </div>
+
+  <footer>Powered by <b>TagaSenti</b> &middot; Apache 2.0 &middot; DOI 10.57967/hf/9620</footer>
+</div>
+
+<script>
+'use strict';
+
+// ---------------------------------------------------------------------------
+// Endpoint. The n8n Webhook node's production path is:
+//     http://n8n:5678/webhook/<path>       from inside the compose network
+//     http://localhost:5678/webhook/<path> from the browser
+// This page is opened in a BROWSER, so it must use localhost, not the
+// internal service name. Change WEBHOOK_PATH to match the n8n node.
+// ---------------------------------------------------------------------------
+// POST to a RELATIVE url, not an absolute one.
+//
+// The page is served from localhost:8080 and n8n listens on :5678. Posting
+// straight to :5678 is a CROSS-ORIGIN request, and a multipart POST triggers a
+// CORS preflight that n8n fails with HTTP 500 and no Access-Control-Allow-Origin
+// header. The browser then blocks the reply and fetch() throws a bare
+// `TypeError: NetworkError` with no explanation - which is exactly what the
+// user saw.
+//
+// A relative URL goes to the same origin that served the page, which nginx
+// proxies straight through to n8n. Same-origin request, no preflight, no CORS
+// headers, nothing to keep in sync. The tradeoff is that the page only works
+// while it is served over http, not opened as a file:// path.
+const WEBHOOK_PATH = 'review-pulso-upload';
+const WEBHOOK_URL = '/webhook/' + WEBHOOK_PATH;
+const N8N_ORIGIN = location.origin;
+
+const $ = (id) => document.getElementById(id);
+const drop = $('drop'), fileInput = $('file'), fileInfo = $('fileinfo');
+const go = $('go'), status = $('status'), bar = $('bar');
+
+let chosen = null;
+
+// ---------------------------------------------------------------------------
+// Drop zone wiring
+// ---------------------------------------------------------------------------
+drop.addEventListener('click', () => fileInput.click());
+drop.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+});
+
+// dragenter/dragleave fire for EVERY child element, so a naive counter
+// flickers as the pointer moves over the icon and the text. The standard fix
+// is to only react on the outermost zone and use a depth counter.
+let dragDepth = 0;
+['dragenter', 'dragover'].forEach(ev =>
+  drop.addEventListener(ev, (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (ev === 'dragenter') dragDepth++;
+    drop.classList.add('over');
+  })
+);
+drop.addEventListener('dragleave', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) drop.classList.remove('over');
+});
+// Without this the browser navigates to the dropped file and the page is lost.
+['dragover', 'drop'].forEach(ev =>
+  window.addEventListener(ev, (e) => e.preventDefault())
+);
+
+drop.addEventListener('drop', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  dragDepth = 0;
+  drop.classList.remove('over');
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) accept(f);
+});
+
+fileInput.addEventListener('change', () => {
+  if (fileInput.files && fileInput.files[0]) accept(fileInput.files[0]);
+});
+
+function accept(f) {
+  // Cheap client-side validation. The server validates again — this only saves
+  // the user a slow round trip on an obviously wrong file.
+  if (!/\.csv$/i.test(f.name) && f.type !== 'text/csv') {
+    return show('err', 'That does not look like a CSV file.',
+      'Expected a .csv file. Got: ' + f.name);
+  }
+  if (f.size > 10 * 1024 * 1024) {
+    return show('err', 'That file is too large (max 10 MB).',
+      'Got ' + (f.size / 1048576).toFixed(1) + ' MB. Split the CSV into smaller files.');
+  }
+  chosen = f;
+  const rows = f.size > 0 ? '' : '';
+  fileInfo.className = 'fileinfo show';
+  fileInfo.textContent = f.name + ' — ' + (f.size / 1024).toFixed(0) + ' KB';
+  go.disabled = !$('business').value.trim();
+  status.className = '';
+  return undefined;
+}
+
+$('business').addEventListener('input', () => {
+  go.disabled = !(chosen && $('business').value.trim());
+});
+
+// ---------------------------------------------------------------------------
+// Submit
+// ---------------------------------------------------------------------------
+go.addEventListener('click', async () => {
+  if (!chosen || !$('business').value.trim()) return;
+
+  go.disabled = true;
+  bar.className = 'show';
+  bar.firstElementChild.style.width = '30%';
+  show('working', 'Uploading your reviews…', chosen.name);
+
+  // multipart/form-data is required: n8n's webhook stores the CSV as a binary
+  // property, and Node 2 (Extract From File) then reads it. The field name
+  // MUST be 'reviews_file' to match the Extract From File node - it is the
+  // same Field Label convention the Form Trigger used.
+  const fd = new FormData();
+  fd.append('reviews_file', chosen, chosen.name);
+  fd.append('business_name', $('business').value.trim());
+  fd.append('context', $('context').value.trim());
+
+  try {
+    bar.firstElementChild.style.width = '70%';
+    const res = await fetch(WEBHOOK_URL, { method: 'POST', body: fd });
+    const text = await res.text();
+
+    if (!res.ok) {
+      bar.className = '';
+      // A 404 from an n8n webhook has exactly one usual cause: the workflow
+      // exists but is not ACTIVE, so the webhook was never registered. That
+      // is a server-side setup step, and a client staring at "HTTP 404" has no
+      // way to guess that. Say it plainly.
+      if (res.status === 404) {
+        return show('err', 'The report service is not running (HTTP 404).',
+          'n8n only registers a production webhook when the workflow is '
+          + 'PUBLISHED. In n8n 2.x there is no Active toggle any more - open '
+          + 'the Review Pulso workflow and click Publish (top right). If it '
+          + 'is already published and still 404s, unpublish it, nudge a node, '
+          + 'and publish again to force re-registration. Then reload this '
+          + 'page and try again.');
+      }
+      if (res.status === 503) {
+        return show('err', 'The report service is unavailable (HTTP 503).',
+          'n8n appears to be down or still starting. Check with: '
+          + 'docker compose logs n8n --tail 30');
+      }
+      // n8n's bare 500 is an HTML page with the single useful word
+      // "Internal Server Error" in it. Strip the tags and the boilerplate so
+      // what is left is either a real message or an honest "look in n8n".
+      const stripped = text
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const useful = stripped
+        && !/^internal server error$/i.test(stripped)
+        && !/^error$/i.test(stripped)
+        ? stripped
+        : null;
+
+      const advice = useful
+        ? useful.slice(0, 500)
+        : 'n8n returns a bare 500 for a failed execution, so the reason is in '
+          + 'the n8n editor: Workflows -> Executions -> open the failed run. '
+          + 'It names the node and the exact error. Alternatively: '
+          + 'docker compose logs n8n --tail 60';
+
+      return show('err', 'The report service could not finish the run (HTTP '
+        + res.status + ').', advice);
+    }
+
+    bar.firstElementChild.style.width = '100%';
+    // n8n replies 200 "Workflow was started" as soon as it ACCEPTS the upload.
+    // That is NOT the report. The model needs ~1 minute to score 500 reviews,
+    // so we must be explicit that nothing is finished yet, or the client will
+    // look for a PDF that does not exist yet.
+    show('ok', 'Upload received — your report is being generated.',
+      'The review ' + chosen.name + ' was accepted. Scoring takes about a minute '
+      + 'for a few hundred reviews, then the PDF and a JSON summary are saved '
+      + 'to the server’s download folder. You can close this page.');
+    setTimeout(() => { bar.className = ''; }, 1200);
+    return undefined;
+  } catch (err) {
+    bar.className = '';
+    const detail = String(err) + ' — is the upload page being SERVED at ' + N8N_ORIGIN
+      + '? Opening index.html directly as a file:// path will not work; it must be'
+      + ' served through the nginx container.';
+    return show('err', 'Could not reach the report service.', detail);
+  }
+});
+
+function show(kind, msg, sub) {
+  status.className = 'show ' + kind;
+  status.innerHTML = '';
+  const a = document.createElement('div');
+  a.textContent = msg;
+  status.appendChild(a);
+  if (sub) {
+    const b = document.createElement('div');
+    b.className = 'sub';
+    b.textContent = sub;
+    status.appendChild(b);
+  }
+}
+</script>
+</body>
+</html>
