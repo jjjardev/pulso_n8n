@@ -13,13 +13,16 @@ it again.
 
 ## 1. The shape of the pipeline
 
-Nine nodes, one linear chain plus a terminal branch.
+Eleven nodes: a linear chain, plus one validation branch that answers with a
+real error instead of dying.
 
 | # | Node | Type | Consumes | Produces |
 |---|---|---|---|---|
 | 1 | `Node 1` | `webhook` | multipart POST | binary + `business_name`, `context` |
 | 2 | `Node 2` | `extractFromFile` | binary CSV | items, one per row |
-| 3 | `Node 3` | `code` (runOnceForAllItems) | items | batched request payloads |
+| 3 | `Node 3` | `code` (runOnceForAllItems) | items | batches, **or a rejection** |
+| 3b | `Node 3b - Input valid?` | `if` | rejection? | routes true→3c, false→4 |
+| 3c | `Node 3c - Respond bad input` | `respondToWebhook` | rejection | **HTTP 400 + the reason** |
 | 4 | `Node 4` | `httpRequest` | payloads | `{results:[{label,score}]}` |
 | 5 | `Node 5` | `code` | results | stats + rule-based insights + HTML |
 | 6 | `Node 6` | `httpRequest` | HTML | PDF binary |
@@ -304,39 +307,72 @@ Verified by live upload, not by inspection:
 | 100 reviews, normal | HTTP 200, PDF written, 13.7 s |
 | `business_name=<script>alert(1)</script>` | HTTP 200, filename slugified to `script-alert-1-script`, payload rendered as **literal text** in the PDF header |
 | `business_name=../../../../etc/cron.d/pwned` | HTTP 200, filename slugified to `etc-cron-d-pwned`, **nothing written outside the output directory** |
+| header-only CSV (zero data rows) | **HTTP 400** - "No usable reviews found" |
+| blank review cells among valid rows | HTTP 200 - blanks skipped, valid rows scored |
 | 1100 rows, 100 unique (repeated 11x) | HTTP 200, 100 scored — **deduped before the cap is applied** |
 | 1100 rows, all unique | **HTTP 500** — rejected by the cap |
 
-### Known defect: the cap rejection is unhelpful
+### The error surface, and why it needed a branch node
 
-The last row above is a real bug, found by live test.
+The last row above is worth reading twice, because the bug it exposed was not
+about the cap.
 
 Node 3 builds a detailed, actionable message:
 
 ```
-Too many reviews: 1100 unique rows found, cap is 1000.
-Split the CSV into files of 1000 rows or fewer and upload each one -
-each file gets its own report. Uploads of ~500 rows finish in about a
-minute; the cap is a safety limit, not a target.
+Too many reviews: 1100 unique rows found, but the cap is 1000.
+Split the CSV into files of 1000 rows or fewer and upload each one - each file
+gets its own report. Uploads of ~500 rows finish in about a minute; the cap is a
+safety limit, not a target. Duplicate rows were removed before counting, so this
+is genuinely 1100 different reviews.
 ```
 
-…and then `throw`s it. A throw aborts the execution, so **`Respond to Webhook`
-never runs** and n8n returns a bare `{"message":"Error in workflow"}` with
-HTTP 500. The client uploading a 1001-row CSV is told nothing useful, and the
-message that would have told them exactly what to do is discarded.
+...and then `throw`s it. **A throw aborts the execution, so `Respond to Webhook`
+never runs**, and n8n substitutes a bare `{"message":"Error in workflow"}` with
+HTTP 500. A client who uploaded 1001 rows was told the workflow errored - not
+that the cap is 1000, and not how to fix it. The message was constructed in one
+node and discarded by the framework in the next.
 
-The cap *works* — that is verified. What is broken is the error surface.
+The general rule: **in n8n, a `throw` is invisible to your own Respond node.**
+Any check whose message is meant for a human needs a routing path, not an
+exception.
 
-Two candidate fixes, neither taken unilaterally because both change the node
-graph and both require a re-import:
+### The fix
 
-1. **Return, don't throw.** Have Node 3 emit `{error: "…", batches: []}` and let
-   `Respond to Webhook` return HTTP 400 with that message. Node 4 receiving zero
-   items would pass through, so the Respond node still executes.
-2. **Add an IF node** after Node 3 to branch error vs. normal, and wire the error
-   branch straight to a 400 response. One more node, but explicit.
+Node 3 now *returns* the rejection instead of throwing, and a branch carries it
+to a dedicated responder:
 
-Either way the fix belongs in `05_generate_workflow_json.py`, not in n8n.
+```
+Node 3 ──▶ Node 3b (IF: pipeline_error present?)
+             ├── true  ─▶ Node 3c ──▶ HTTP 400 { accepted:false, error, hint }
+             └── false ─▶ Node 4 (unchanged)
+```
+
+Two nodes added; the happy path is byte-for-byte unchanged. `upload/index.html`
+gained a matching `res.status === 400` branch that parses the JSON body and
+shows `error` and `hint`, because a 400 falling through to the generic 500
+handler would have displayed a raw JSON string.
+
+Both halves are asserted, because either alone is half a fix:
+
+- `test 19` checks the IF condition tests `pipeline_error`, that its **true**
+  branch (output 0) reaches the rejection responder, and that its **false**
+  branch (output 1) continues to `Node 4`.
+- `test 17` checks the page handles 400, parses the body, and surfaces `error`
+  and `hint`.
+
+### Two throws deliberately left in place
+
+`Node 5` and `Node 7` still throw, and that is intentional:
+
+| Node | Why it stays a hard failure |
+|---|---|
+| `Node 5` | Fires when tagasenti returns a different number of results than reviews sent. That is a broken contract between two of our own services, not bad user input - it belongs in the n8n execution log where an operator will look, and a 4xx would mislabel it as the client's fault. |
+| `Node 7` | The filename safety assertion. It is a deliberate second lock against path traversal, and it must prevent `Node 8` from writing. Converting it to a soft error risks a file landing outside the output directory. Security controls should fail closed and be loud. |
+
+The distinction that matters: **Node 3's throws were about the client's file, so
+the client deserves an answer. Nodes 5 and 7 are about our own integrity, so the
+operator deserves a log entry.**
 
 ---
 

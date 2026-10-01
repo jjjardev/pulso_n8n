@@ -251,9 +251,39 @@ for (const item of items) {
   reviews.push(text);
 }
 
+// ERROR HANDLING (added after live testing, 2026-10-01)
+// ---------------------------------------------------------------------------
+// These two checks used to `throw`. That was wrong in a way the tests could not
+// catch: a throw ABORTS the execution, so `Node 1b - Respond` never runs, and
+// n8n returns a bare {"message":"Error in workflow"} with HTTP 500.
+//
+// The messages below - which name the exact problem and say what to do about
+// it - were being constructed and then discarded. A client who uploaded 1001
+// rows was told the workflow errored, not that the cap is 1000.
+//
+// So instead of throwing, we return a structured error and let `Node 3b` route
+// it to `Node 3c`, which responds 400 with the message intact. Verified live:
+// 1100 unique rows now returns HTTP 400 with actionable text, and a CSV with no
+// usable rows returns 400 instead of 500.
+//
+// Node 3b and Node 3c are the reason this node has 11 siblings now. See
+// ORCHESTRATION.md "Known defect" for the full account.
+
+// Returned rather than thrown, so the message can actually reach the client.
+const reject = (message, hint) => {
+  return [{ json: {
+    pipeline_error: message,
+    pipeline_error_hint: hint || '',
+    accepted: false,
+  } }];
+};
+
 if (reviews.length === 0) {
-  throw new Error('No usable reviews found. Check that your CSV has a column '
-    + 'named review/text/comment/content/feedback and that cells are not empty.');
+  return reject(
+    'No usable reviews found. Nothing in that CSV could be scored.',
+    'Check that your CSV has a column named review, text, comment, content or '
+    + 'feedback, and that the cells are not empty. Rows shorter than 3 '
+    + 'characters are skipped, and duplicate reviews are removed.');
 }
 
 // CORRECTION 3: the cap is derived from a real benchmark on this host
@@ -268,11 +298,12 @@ if (reviews.length === 0) {
 // worst-case review length and was rejected on measurement.
 const CAP = 1000;
 if (reviews.length > CAP) {
-  throw new Error(
-    `Too many reviews: ${reviews.length} unique rows found, cap is ${CAP}.\\n`
-    + `Split the CSV into files of ${CAP} rows or fewer and upload each one - `
-    + `each file gets its own report. Uploads of ~500 rows finish in about a `
-    + `minute; the cap is a safety limit, not a target.`);
+  return reject(
+    `Too many reviews: ${reviews.length} unique rows found, but the cap is ${CAP}.`,
+    `Split the CSV into files of ${CAP} rows or fewer and upload each one - each `
+    + `file gets its own report. Uploads of ~500 rows finish in about a minute; `
+    + `the cap is a safety limit, not a target. Duplicate rows were removed `
+    + `before counting, so this is genuinely ${reviews.length} different reviews.`);
 }
 
 // Pull the form metadata from the trigger.
@@ -307,7 +338,77 @@ CLEAN_NODE = {
     "position": [700, 300],
     "notes": "CORRECTION 3: cap=2000 derived from a real benchmark. Dedupes on "
              "a normalised form but keeps ORIGINAL text for the PDF. Collapses "
-             "to ONE item so Node 4 makes a single batched call.",
+             "to ONE item so Node 4 makes a single batched call. Returns a "
+             "structured error instead of throwing, so the message survives.",
+}
+
+# ---------------------------------------------------------------------------
+# Node 3b - IF: was the input acceptable?
+#
+# Added with Node 3c to convert an aborted execution into a real HTTP 400.
+# `true` branch = the input is bad. The boolean condition tests for the presence
+# of `pipeline_error`, which Node 3 sets only on the two rejection paths.
+# ---------------------------------------------------------------------------
+IF_VALID_NODE = {
+    "parameters": {
+        "conditions": {
+            "options": {
+                "caseSensitive": True,
+                "leftValue": "",
+                "typeValidation": "strict",
+                "version": 2,
+            },
+            "conditions": [
+                {
+                    "id": "has-pipeline-error",
+                    "leftValue": "={{ !!$json.pipeline_error }}",
+                    "rightValue": True,
+                    "operator": {
+                        "type": "boolean",
+                        "operation": "equals",
+                        "singleValue": True,
+                    },
+                }
+            ],
+            "combinator": "and",
+        },
+        "options": {},
+    },
+    "id": "a1000000-0000-4000-8000-000000000003b",
+    "name": "Node 3b - Input valid?",
+    "type": "n8n-nodes-base.if",
+    "typeVersion": 2.3,
+    "position": [820, 300],
+    "notes": "Routes on pipeline_error. TRUE (output 0) = bad input, straight to "
+             "Node 3c. FALSE (output 1) = proceed to inference.",
+}
+
+# ---------------------------------------------------------------------------
+# Node 3c - Respond 400 with the reason the upload was rejected.
+#
+# This is the node whose absence made the pipeline's error messages useless.
+# `throw` in a Code node aborts the execution before any Respond node runs, so
+# n8n substitutes its generic "Error in workflow" for whatever was actually
+# wrong with the client's file.
+# ---------------------------------------------------------------------------
+RESPOND_ERROR_NODE = {
+    "parameters": {
+        "respondWith": "json",
+        "responseCode": 400,
+        "responseBody": (
+            "={{ { accepted: false, "
+            "error: $json.pipeline_error, "
+            "hint: $json.pipeline_error_hint } }}"
+        ),
+        "options": {},
+    },
+    "id": "a1000000-0000-4000-8000-000000000003c",
+    "name": "Node 3c - Respond bad input",
+    "type": "n8n-nodes-base.respondToWebhook",
+    "typeVersion": 1.1,
+    "position": [820, 520],
+    "notes": "Returns 400 with the real reason: which check failed, and what to "
+             "do about it. Reachable only from Node 3b's true branch.",
 }
 
 # ---------------------------------------------------------------------------
@@ -1039,16 +1140,28 @@ WRITE_PDF_NODE = {
 # path to delivering the PDF.
 
 NODES = [
-    WEBHOOK_NODE, EXTRACT_NODE, CLEAN_NODE, HTTP_TAGASENTI_NODE, REPORT_NODE,
-    GOTENBERG_NODE, NAME_NODE, WRITE_PDF_NODE, RESPOND_NODE,
+    WEBHOOK_NODE, EXTRACT_NODE, CLEAN_NODE, IF_VALID_NODE, RESPOND_ERROR_NODE,
+    HTTP_TAGASENTI_NODE, REPORT_NODE, GOTENBERG_NODE, NAME_NODE, WRITE_PDF_NODE,
+    RESPOND_NODE,
 ]
 
-# Straight line. The two writes are sequential, not parallel, so a failure in
-# the PDF write is visible before the sidecar is attempted.
+# Straight line, with one branch: Node 3 now RETURNS a rejection rather than
+# throwing, so Node 3b routes it to Node 3c (HTTP 400) instead of the execution
+# dying and n8n substituting {"message":"Error in workflow"}.
+#
+# Node 3b is an IF node and therefore has TWO outputs:
+#   output 0 = "true"  = pipeline_error is present = bad input  -> Node 3c
+#   output 1 = "false" = no error                     = proceed  -> Node 4
 CONNECTIONS = {
     "Node 1": {"main": [[{"node": "Node 2", "type": "main", "index": 0}]]},
     "Node 2": {"main": [[{"node": "Node 3", "type": "main", "index": 0}]]},
-    "Node 3": {"main": [[{"node": "Node 4", "type": "main", "index": 0}]]},
+    "Node 3": {"main": [[{"node": "Node 3b - Input valid?",
+                          "type": "main", "index": 0}]]},
+    # index 0 is the true branch (rejection), index 1 the false branch (happy path)
+    "Node 3b - Input valid?": {"main": [
+        [{"node": "Node 3c - Respond bad input", "type": "main", "index": 0}],
+        [{"node": "Node 4", "type": "main", "index": 0}],
+    ]},
     "Node 4": {"main": [[{"node": "Node 5", "type": "main", "index": 0}]]},
     "Node 5": {"main": [[{"node": "Node 6", "type": "main", "index": 0}]]},
     "Node 6": {"main": [[{"node": "Node 7 - Filename",

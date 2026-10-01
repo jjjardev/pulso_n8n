@@ -13,7 +13,7 @@ No external AI service, no API keys, no per-review cost.
 | **Runtime** | 4 Docker containers: n8n, tagasenti (FastAPI + ONNX Runtime), Gotenberg (PDF), nginx (upload page) |
 | **Throughput** | ~37 reviews/sec on a 6-core CPU; a 100-review report lands in **4.7–12.4 s** |
 | **Credentials** | **Zero.** No API key, no token, no SMTP password. |
-| **Test coverage** | 243 assertions across 8 suites, plus 2 accuracy suites |
+| **Test coverage** | 252 assertions across 8 suites, plus 2 accuracy suites |
 
 ---
 
@@ -40,7 +40,8 @@ browser ──POST──► nginx (upload page, 127.0.0.1:8080)
                   n8n webhook (127.0.0.1:5678)
                      │
                      ├─► 1  Extract CSV        binary → rows
-                     ├─► 2  Code               validate, cap 1000, batch
+                     ├─► 2  Code               dedupe, validate, cap 1000, batch
+                     ├─► 2b IF                 input OK?   ──no──► 400 + the reason
                      ├─► 3  HTTP               POST batches → tagasenti:8000
                      ├─► 4  Code               stats + insight rules + HTML
                      ├─► 5  HTTP               HTML → Gotenberg → PDF bytes
@@ -53,6 +54,11 @@ The report is a single A4 page: a donut with a net sentiment score, a stacked
 positive/neutral/negative bar, per-class counts, a rules-derived insight list,
 and up to three verbatim comment cards. Review text is HTML-escaped, so a
 review containing `<script>` cannot break the render — there is a test for it.
+
+A bad CSV — over the cap, or no usable rows — comes back as **HTTP 400 with the
+specific reason and what to do about it**, shown in the page. That required a
+branch node, because a `throw` in an n8n Code node is invisible to your own
+Respond node: see [ORCHESTRATION.md](ORCHESTRATION.md#the-error-surface-and-why-it-needed-a-branch-node).
 
 **The design decisions and why they were made** are in
 [ORCHESTRATION.md](ORCHESTRATION.md). Three architectures were built and
@@ -75,18 +81,40 @@ cp .env.example .env
 openssl rand -hex 32          # paste into N8N_ENCRYPTION_KEY in .env
 
 # 2. Model weights (553 MB, verified against a pinned sha256).
+#    MUST come before the build: the image does COPY tagasenti_int8.onnx, and
+#    without this step the build fails with a message about a missing
+#    "tokenizer" that does not explain itself.
 bash tagasenti/fetch_model.sh
 
 # 3. Reports directory, writable by the container user (uid 1000).
 mkdir -p ~/Downloads/review-pulso && sudo chown 1000:1000 ~/Downloads/review-pulso
 
-# 4. Start.
+# 4. Check everything a first run needs, before it fails halfway.
+bash tagasenti/preflight.sh
+
+# 5. Start.
 sudo docker compose up -d --build
 
-# 5. Import the workflow: n8n UI → Workflows → ⋮ → Import from File
+# 6. Import the workflow: n8n UI → Workflows → ⋮ → Import from File
 #    → workflow/review-pulso.workflow.json
 #    THEN click PUBLISH (top right). n8n 2.x has no "Active" toggle;
 #    Publish is what registers the production webhook.
+```
+
+### Only one copy can run at a time
+
+n8n binds `127.0.0.1:5678` and the upload page `127.0.0.1:8080`. Docker Compose
+derives the **project name from the directory name**, so a second checkout — or
+a clone alongside your working copy — is a completely separate project: it will
+fail to bind those ports, and it gets its own `n8n_data` volume, meaning a fresh
+n8n with no owner account and no workflows. `preflight.sh` checks for the port
+clash and tells you which stack to stop.
+
+If you are migrating from an older checkout that held the compose file, stop it
+first so the ports free up:
+
+```bash
+cd <old checkout> && sudo docker compose down      # NOT 'down -v' — keeps the volume
 ```
 
 Then open **<http://localhost:8080/>**.

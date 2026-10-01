@@ -291,6 +291,28 @@ def t3_workflow_contract():
           f"page={page_path.group(1) if page_path else None} "
           f"workflow={hook['parameters']['path']}")
 
+    # ---- T3b. the rejection path, end to end -----------------------------
+    # Node 3 rejects bad input with HTTP 400 and a JSON body carrying the real
+    # reason. The page has to READ that body, not fall through to its generic
+    # 500 handler - otherwise the client is shown a raw JSON string, and the
+    # whole point of the 400 is lost.
+    html = open(os.path.join(REPO_ROOT, "upload", "index.html"),
+                encoding="utf-8").read()
+    check("page handles HTTP 400 explicitly",
+          "res.status === 400" in html)
+    check("page parses the 400 body as JSON",
+          "JSON.parse(text)" in html)
+    check("page shows the workflow's error field",
+          re.search(r"j\.error", html) is not None)
+    check("page shows the workflow's hint field",
+          re.search(r"j\.hint", html) is not None)
+
+    err_responders = [n for n in wf["nodes"]
+                      if n["name"].endswith("bad input")]
+    check("workflow has a 400 rejection responder",
+          len(err_responders) == 1
+          and err_responders[0]["parameters"].get("responseCode") == 400)
+
     ext = nodes.get("Node 2", {}).get("parameters", {})
     check("Node 2 reads the binary field 'reviews_file'",
           ext.get("binaryPropertyName") == "reviews_file",

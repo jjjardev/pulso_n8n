@@ -291,6 +291,20 @@ go.addEventListener('click', async () => {
           'n8n appears to be down or still starting. Check with: '
           + 'docker compose logs n8n --tail 30');
       }
+      // 400 is the pipeline's own "your file was rejected", carrying the real
+      // reason from Node 3c: what failed the check and what to do about it.
+      // Added with the rejection branch in the workflow; without this block the
+      // client would be shown a raw JSON string.
+      if (res.status === 400) {
+        let err = '', hint = '';
+        try {
+          const j = JSON.parse(text);
+          err = j.error || j.message || '';
+          hint = j.hint || '';
+        } catch (e) { /* not JSON - fall through to the raw body below */ }
+        return show('err', err || 'That CSV was rejected.',
+          hint || text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 600));
+      }
       // n8n's bare 500 is an HTML page with the single useful word
       // "Internal Server Error" in it. Strip the tags and the boilerplate so
       // what is left is either a real message or an honest "look in n8n".

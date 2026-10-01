@@ -187,13 +187,51 @@ def main():
     check("Node 8 reads that one binary",
           nodes["Node 8 - Save PDF"]["parameters"]["inputDataFieldName"] == "data")
 
-    # ---- Node 1b respond -------------------------------------------------
+    # ---- Respond nodes ---------------------------------------------------
     print("\nN1b. Respond to Webhook")
     r = [n for n in wf["nodes"] if n["type"].endswith("respondToWebhook")]
-    check("a Respond to Webhook node exists", len(r) == 1)
+    # Two, not one: the success responder and the rejection responder. The
+    # rejection path exists because a `throw` in a Code node aborts the run
+    # before any Respond node executes, which is how a real client ended up
+    # being told "Error in workflow" instead of what was actually wrong.
+    check("two Respond nodes exist (success + rejection)", len(r) == 2,
+          f"found {len(r)}")
     if r:
         check("Node 1's responseMode matches (must be 'responseNode')",
               nodes["Node 1"]["parameters"]["responseMode"] == "responseNode")
+
+    err_nodes = [n for n in r if n["name"].endswith("bad input")]
+    check("a rejection responder exists", len(err_nodes) == 1)
+    if err_nodes:
+        e = err_nodes[0]
+        check("rejection responder returns HTTP 400",
+              e["parameters"].get("responseCode") == 400,
+              str(e["parameters"].get("responseCode")))
+        body = e["parameters"].get("responseBody", "")
+        check("rejection body surfaces the real reason",
+              "pipeline_error" in body and "pipeline_error_hint" in body)
+
+    # ---- the IF node that routes to it -----------------------------------
+    print("\nN3b. Input-validation branch")
+    ifs = [n for n in wf["nodes"] if n["type"].endswith(".if")]
+    check("an IF node routes the validation branch", len(ifs) == 1)
+    if ifs:
+        cond = ifs[0]["parameters"].get("conditions", {})
+        checks = cond.get("conditions", [])
+        check("IF tests for pipeline_error",
+              any("pipeline_error" in str(c.get("leftValue", ""))
+                  for c in checks),
+              str([c.get("leftValue") for c in checks]))
+        # IF output 0 is TRUE. pipeline_error present must land on the 400.
+        branch0 = wf["connections"].get(ifs[0]["name"], {}).get("main", [[]])[0]
+        target = branch0[0]["node"] if branch0 else None
+        check("IF true branch goes to the rejection responder",
+              target is not None and target.endswith("bad input"),
+              str(target))
+        branch1 = wf["connections"].get(ifs[0]["name"], {}).get("main", [[], []])[1]
+        target1 = branch1[0]["node"] if branch1 else None
+        check("IF false branch continues to inference",
+              target1 == "Node 4", str(target1))
 
     # ---- the data contract between consecutive nodes -------------------
     print("\nCONTRACT. Every field an expression READS must be EMITTED upstream")

@@ -429,6 +429,12 @@ You need to do this once, and again whenever the workflow file changes.
 4. Choose `workflow/review-pulso.workflow.json`.
 5. Click **Publish**.
 
+   > The workflow has **11 nodes**. If you see 9, you have an older copy of the
+   > JSON — regenerate it with `python3 agent_journal/05_generate_workflow_json.py`
+   > and import again. The two extra nodes are the input-validation branch that
+   > turns a rejected CSV into a readable HTTP 400 instead of *"Error in
+   > workflow"*.
+
 > ### ⚠️ "Publish", not "Activate"
 >
 > n8n version 2.x **removed the Active/Inactive switch**. A production webhook
@@ -480,6 +486,37 @@ fastest way to diagnose any problem, and it is what the log cannot tell you.
 ## 9. Troubleshooting
 
 Each of these actually happened during the build.
+
+### "That CSV was rejected" (HTTP 400)
+
+Working as intended — the pipeline refused the file and told you why. Two
+checks produce this:
+
+| Message | Cause | Fix |
+|---|---|---|
+| `No usable reviews found` | No row had a usable `review`/`text`/`comment`/`content`/`feedback` cell. Rows under 3 characters are skipped, and duplicates removed, so a file can reach zero. | Check the column name and that cells are not empty. |
+| `Too many reviews: N unique rows` | Over the 1000-review cap. | Split the CSV into files of ≤1000 rows. ~500 rows finishes in about a minute. The cap is a safety limit, not a target. |
+
+If you instead see **"Error in workflow"** for input that should be fine, that
+is the *old* 9-node workflow, which threw instead of answering. Regenerate the
+JSON and re-import:
+
+```bash
+python3 agent_journal/05_generate_workflow_json.py
+```
+
+### "Error in workflow" (HTTP 500)
+
+A node failed and n8n could not tell you which. Check the execution log:
+
+```bash
+sudo docker compose logs n8n --tail 60
+```
+
+Two throws are intentional and land here — see `ORCHESTRATION.md` for why they
+stay hard failures: **Node 5** fires when tagasenti returns a different number
+of results than reviews sent (a broken contract between our own services), and
+**Node 7** is the filename safety assertion that must block the write.
 
 ### "Could not reach the server" / `TypeError: NetworkError`
 

@@ -159,13 +159,20 @@ function makeRunOnce(code, { items, trigger, node4Response }) {
     out.altColumns = results;
   }
 
-  // -- empty input must throw a clear error
+  // -- empty input must RETURN a structured rejection, not throw.
+  // Changed 2026-10-01. This used to assert that Node 3 threw, which is exactly
+  // the bug: a throw aborts the execution before Respond to Webhook runs, so
+  // the client got n8n's generic {"message":"Error in workflow"} instead of the
+  // message Node 3 had just constructed. Node 3b now routes this to a 400.
   {
     const items = [{ json: { review: '' } }, { json: { review: '  ' } }];
-    let msg = null;
-    try { await makeRunOnce(NODE3_CODE, { items, trigger: { business_name: 'X' } }); }
-    catch (e) { msg = e.message; }
-    out.node3_emptyError = msg;
+    let err = null;
+    try {
+      const r = await makeRunOnce(NODE3_CODE, { items, trigger: { business_name: 'X' } });
+      err = (r && r[0] && r[0].json && r[0].json.pipeline_error) || null;
+    }
+    catch (e) { err = 'THREW: ' + e.message; }
+    out.node3_emptyError = err;
   }
 
   // =====================================================================
@@ -428,9 +435,10 @@ def main():
           out["shortrow_count"] == 1, str(out["shortrow_count"]))
     for col, got in out["altColumns"].items():
         check(f"reads column alias '{col}'", got == 1, str(got))
-    check("empty input throws a helpful error",
+    check("empty input returns a rejection (not a throw)",
           bool(out["node3_emptyError"])
-          and "No usable reviews" in out["node3_emptyError"],
+          and "No usable reviews" in out["node3_emptyError"]
+          and "THREW" not in out["node3_emptyError"],
           str(out["node3_emptyError"]))
 
     print("\n-- Node 5: stats + insights + HTML --")
