@@ -286,16 +286,28 @@ if (reviews.length === 0) {
     + 'characters are skipped, and duplicate reviews are removed.');
 }
 
-// CORRECTION 3: the cap is derived from a real benchmark on this host
-// (agent_journal/08_measure_token_throughput.output.log), not assumed.
-// Throughput DEGRADES with review length: 576 tok/s at 57 tokens, 356 tok/s at
-// the 128-token truncation limit. Projected runtimes at those two extremes:
-//   500  reviews  ->  ~50s  (short)  ... ~180s (worst case)
-//  1000  reviews  -> ~100s  (short)  ... ~360s (worst case)
-//  2000  reviews  -> ~200s  (short)  ... ~720s (worst case, would time out)
-// 1000 is the cap because its worst case (360s) fits Node 4's 600s timeout
-// with room to spare. 2000 - the doc's number - would need ~12 minutes at
-// worst-case review length and was rejected on measurement.
+// THE CAP, and why it is 1000.
+//
+// Derived from measurement, not assumed. Throughput DEGRADES with review length
+// - this is the part that matters, and it is large:
+//
+//   08, re-measured 2026-10-01:  ~613 tok/s at 57 tokens, ~450 tok/s at the
+//   128-token truncation limit. Earlier runs of the same benchmark gave 576 and
+//   356, so treat any single figure as a range of roughly +/-25%.
+//
+// End to end against Node 4's 600 s timeout, on the longest realistic reviews:
+//   500  reviews  ->   ~87 s   (test 02, idle machine)
+//  1000  reviews  ->  ~173 s   <- the cap, with ~3.5x margin
+//  2000  reviews  ->  ~347 s   still fits, on an idle machine
+//
+// So 1000 is CONSERVATIVE, not tuned: it was set when the measured worst case
+// was about 2x slower, and that margin was never spent. Under CPU contention the
+// same work has run 2-4x slower, which would overrun the timeout - so do not
+// read the idle numbers as a guarantee.
+//
+// The original specification proposed 2000 with a 120 s timeout. That pairing was
+// wrong: 2000 rows of long reviews cannot finish in 120 s on any machine. The
+// cap here is the one that was measured.
 const CAP = 1000;
 if (reviews.length > CAP) {
   return reject(

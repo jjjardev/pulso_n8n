@@ -132,6 +132,17 @@ def main():
         fh.write(html)
         html_path = fh.name
     try:
+        # Gotenberg publishes NO host ports (compose binds only 127.0.0.1 for
+        # n8n and the uploader; gotenberg is internal to the Docker network).
+        # So http://localhost:3000 from the host cannot connect, and this
+        # --live-pdf path fails on a correctly-configured install.
+        #
+        # Run it against the container instead:
+        #     GOTENBERG_URL=http://gotenberg:3000 \
+        #       python3 07_render_sample_report.py --live-pdf
+        # from a shell inside the network, e.g.
+        #     docker compose exec n8n sh -c '...'
+        # or expose the port temporarily if you want it from the host.
         url = os.environ.get("GOTENBERG_URL", "http://localhost:3000")
         cmd = [
             "curl", "-sS", "-X", "POST", f"{url}/forms/chromium/convert/html",

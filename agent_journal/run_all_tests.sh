@@ -130,6 +130,12 @@ declare -a SUITES=(
   "20|bash 20_check_downloads_permissions.sh|Check the container user can actually write the reports folder"
 )
 
+# These import tagasenti/main.py directly, and that module imports onnxruntime
+# and transformers. Those live in the CONTAINER image, not on a host by default,
+# so on a fresh clone --full fails with:
+#     ModuleNotFoundError: No module named 'onnxruntime'
+# That is a missing prerequisite rather than a defect, and the traceback names
+# nothing useful. README "Requires" has the pip install line.
 declare -a SLOW=(
   "02|python3 02_test_tagasenti_service.py|Check main.py: batch ordering, the review cap, guard rails, and real throughput (slow: loads a 537MB model)"
   "16|python3 16_score_predictions.py|Measure the model's accuracy against data/test-100-ground-truth.csv (slow: loads the model)"

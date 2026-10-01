@@ -49,8 +49,24 @@ if [ ! -f "$HTML" ]; then
     exit 1
 fi
 if [ ! -x "$CHROME" ]; then
-    echo "FATAL: $CHROME not found (needed to render a screenshot)"
-    exit 1
+    # SKIP, not fail. This script renders through Chrome because Gotenberg is a
+    # PDF engine with no screenshot capability, and a bare `exit 1` here turned a
+    # missing optional dependency into a red `--full` run on any machine that
+    # does not have Chrome installed - including a CI runner and most fresh
+    # clones. The check it performs (does the report *look* right) is inherently
+    # manual anyway; page count is verified mechanically by 13_fit_one_page.py.
+    #
+    # Set STRICT_VISUAL=1 to make this fatal instead.
+    if [ "${STRICT_VISUAL:-0}" = "1" ]; then
+        echo "FAIL: $CHROME not found (needed to render a screenshot)"
+        exit 1
+    fi
+    echo "SKIP: $CHROME not installed - cannot render a screenshot."
+    echo "      This is an optional visual check. The page count is verified"
+    echo "      mechanically by test 13, and the report HTML is at"
+    echo "      $HTML (open it in any browser)."
+    echo "      To make this fatal: STRICT_VISUAL=1 bash 14_visual_check.sh"
+    exit 0
 fi
 
 # A4 at 96 CSS px/inch.

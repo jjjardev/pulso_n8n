@@ -2522,6 +2522,42 @@ does not exist, so the suite **failed**. Correct for a developer setting up,
 wrong for CI — which is why the workflow creates the directory first. Verified
 by running the whole job locally against an empty `$HOME`.
 
+## 22d. Every script, actually run
+
+The previous audits checked claims, then documented commands. Both left a
+category untouched: **the four scripts that no test runner ever executes.**
+
+`run_all_tests.sh` runs 8 suites plus 02 and 16 under `--full`. It never runs
+**03**, **07**, **08**, or **15** - they are diagnostics, not tests. All four
+still worked when I ran them, with two findings:
+
+**1. `07_render_sample_report.py --live-pdf` cannot work on a correct install.**
+It posts to `http://localhost:3000`, but Gotenberg publishes no host ports - that
+is deliberate, and `09_smoke_test.sh` asserts it. The script's error message
+("Is Gotenberg running?") sends you hunting for a service that is running fine
+and is simply not reachable from the host. Now documented, with the
+`GOTENBERG_URL=http://gotenberg:3000` override for running it inside the network.
+
+**2. `14_visual_check.sh` failed hard when Chrome was absent.** A bare `exit 1`
+turned an optional visual check into a red `--full` run on any machine without
+`/usr/bin/google-chrome` - which includes CI runners and most fresh clones. It
+now SKIPs with an explanation and exits 0; `STRICT_VISUAL=1` restores the fatal
+behaviour. Verified by pointing CHROME at a nonexistent path.
+
+Also: **Node 3's cap comment still cited `576 tok/s` and `356 tok/s`** from the
+original build. Re-running 08 today gives ~613 and ~450. The comment's runtime
+projections (1000 reviews = 360 s worst case) were also from a loaded run;
+measured unloaded it is ~173 s. The comment now states the range, says the cap is
+conservative rather than tuned, and warns that the idle numbers are not a
+guarantee. `const CAP = 1000` is unchanged - only the reasoning above it moved,
+verified by diffing the regenerated JSON (1 line, comment only).
+
+**3. `--full` needs `onnxruntime` on the HOST**, because 02 and 16 import
+`main.py` directly. Those live in the container image. On a fresh clone `--full`
+fails 2 suites with `ModuleNotFoundError`, and the traceback names nothing
+useful. Documented in README "Requires" with the pip line and the container
+alternative, and noted at the point where it bites.
+
 ## 23. Still open
 
 1. **The 400 fix needs a re-import.** It is in `05_generate_workflow_json.py`

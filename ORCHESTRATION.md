@@ -458,6 +458,24 @@ test 19   node parameter validation, branch wiring, image pins  79 assertions
 test 20   output directory writability
 ```
 
+Six more scripts exist and are **diagnostics, not tests** - no runner executes
+them, and they are not part of CI:
+
+| Script | What it does | Needs |
+|---|---|---|
+| `01` | Verifies the ONNX graph and label mapping against the model card | the model |
+| `03` | Diagnoses padding sensitivity and thread-count prediction drift | the model |
+| `04` | Benchmarks thread count against a fully padded corpus | the model |
+| `08` | Measures token throughput by review length | the model |
+| `07` | Renders the report HTML for visual inspection | `--live-pdf` needs Gotenberg reachable |
+| `15` | Regenerates the 100-row test CSV and its ground truth | nothing |
+
+Two of them have prerequisites the test runner cannot supply: `14` needs
+`/usr/bin/google-chrome` (it skips cleanly without it), and `02`/`16` under
+`--full` need `onnxruntime` on the host, which normally lives only in the
+container image. `07 --live-pdf` cannot work from the host at all, because
+Gotenberg publishes no ports by design.
+
 **280 assertions in the quick suite.**
 
 The important structural point: these tests verify **code and wiring**, not

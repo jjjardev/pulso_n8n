@@ -76,6 +76,29 @@ list — the runtime is four containers plus a static page. Model weights
 running system; they are only needed for the test suites and the workflow
 generator.
 
+**For two checks that are not part of the CI suite:** `google-chrome` (at
+`/usr/bin/google-chrome`) and a running stack. `14_visual_check.sh` renders the
+report through Chrome rather than Gotenberg, because Gotenberg is a PDF engine
+with no screenshot capability. On a machine without Chrome that script is
+skipped — everything else works.
+
+**`--full` additionally needs `onnxruntime` and `transformers` on the HOST:**
+
+```bash
+pip install onnxruntime transformers   # plus numpy
+```
+
+Those live inside the tagasenti image, not on your machine. Without them,
+`run_all_tests.sh --full` fails suites 02 and 16 with
+`ModuleNotFoundError: No module named 'onnxruntime'`. The default quick suite
+does not need them — it is static and loads no model.
+
+The container is the alternative, and avoids a second copy of the library:
+
+```bash
+sudo docker compose exec tagasenti python -c "import onnxruntime; print(onnxruntime.__version__)"
+```
+
 ```bash
 git clone https://github.com/jjjardev/pulso_n8n.git
 cd pulso_n8n
