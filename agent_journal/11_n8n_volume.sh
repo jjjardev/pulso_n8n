@@ -170,7 +170,7 @@ docker run --rm -v "$VOLUME":/data:ro alpine:latest sh -c "
 .mode column
 .headers on
 .width 14 8
-SELECT 'users'        AS entity, COUNT(*) AS n FROM user_entity
+SELECT 'users'        AS entity, COUNT(*) AS n FROM user
 UNION ALL SELECT 'credentials', COUNT(*) FROM credentials_entity
 UNION ALL SELECT 'workflows',   COUNT(*) FROM workflow_entity
 UNION ALL SELECT 'executions',  COUNT(*) FROM execution_entity;
@@ -183,7 +183,7 @@ SQL
   sqlite3 \$DB 'SELECT id, name, type FROM credentials_entity;'
   echo
   echo '  --- users (id / email only) ---'
-  sqlite3 \$DB 'SELECT id, email FROM user_entity;'
+  sqlite3 \$DB 'SELECT id, email FROM user;'
 " 2>&1 | sed 's/^/  /'
 
 echo
