@@ -432,8 +432,15 @@ asserts no top-level `responseCode` exists, because the bug's signature is
 
 ## 6. Testing strategy
 
-`agent_journal/run_all_tests.sh` runs everything; `--full` adds the two slow
-accuracy suites.
+`agent_journal/run_all_tests.sh` runs everything; `--full` adds the slow suites.
+
+**The quick suite runs on every push** (`.github/workflows/quick-suite.yml`).
+That is deliberate: several claims in this document were wrong for a long time,
+and every one of them was caught by running something rather than by reading the
+documentation. CI is what keeps the next one from shipping. It runs the quick
+suites only — they are static and load no model — plus two checks that matter for
+a fresh clone: that the committed workflow JSON still matches what the generator
+produces, and that `fetch_model.sh` can fetch and sha256-verify the weights.
 
 ```
 test 01   ONNX loads, labels verified against the model card    (slow)
@@ -447,11 +454,11 @@ test 13   report fits on one A4 page
 test 16   accuracy scoring                                      (slow)
 test 17   upload page, escaping, 400 path, success claims    54 assertions
 test 18   proxy and CORS behaviour                              20 assertions
-test 19   node parameter validation, branch wiring            75 assertions
+test 19   node parameter validation, branch wiring, image pins  79 assertions
 test 20   output directory writability
 ```
 
-**267 assertions in the quick suite.**
+**280 assertions in the quick suite.**
 
 The important structural point: these tests verify **code and wiring**, not
 business correctness. Nothing here can tell you the model is accurate for your

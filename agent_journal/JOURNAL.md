@@ -2476,6 +2476,52 @@ This is the second time the directory-derived project name caused a real defect.
 It is the kind of fact that is invisible until a command that depends on it is
 run the way the documentation tells you to.
 
+## 22c. Fresh-clone readiness
+
+The last audit asked a different question from the one before it. Not "are the
+claims true" but "would someone who has never seen this machine get a working
+system from a clone". Three things would have blocked them:
+
+1. **The owner-account step was undocumented.** A fresh n8n volume shows an
+   account-setup screen before any workflow exists. The quickstart went straight
+   to "Import from File", so the first-runner stopped there with no explanation.
+
+2. **The permission advice was right by luck.** README said
+   `sudo chown 1000:1000`; `test 20` said `chmod 777`. Neither is wrong, but
+   they are not the same fix, and which one is needed depends on the host uid:
+
+   | Host uid | `755` | `775` | `777` |
+   |---|---|---|---|
+   | 1001 (this machine) | no | no | **yes** |
+   | 1000 (fresh Ubuntu's first user) | yes | yes | yes |
+
+   `chown 1000:1000` works here only because uid 1000 is a *different* account
+   on this box. On a fresh machine the user already is 1000, making it a no-op.
+   The underlying rule is that a bind mount does not map the container's
+   supplementary groups to the host, so only `other` bits are reliable. Now
+   documented in both files, and `test 20` was already computing it correctly.
+
+3. **`image: n8nio/n8n` had no tag**, i.e. it floated to `:latest`. Three
+   behaviours this project depends on are version-specific: Publish replaced
+   Active in n8n 2.x, n8n renamed `user_entity` to `user` in 2.x, and Respond to
+   Webhook moved `responseCode` into `parameters.options`. A newer image would
+   break all three quietly. Pinned to `2.40.7`, verified to exist upstream, and
+   `test 19` now asserts the pin so it cannot be unpinned by accident.
+
+Also: `python3` and `node` were listed under "Requires" alongside Docker, which
+implied the runtime needed them. It does not — they are test-only.
+
+**And CI**, because the recurring failure mode in this project was a plausible
+number written from a defective run and never re-measured. `.github/workflows/
+quick-suite.yml` runs the quick suite, the generator-determinism check, and
+`fetch_model.sh` on every push, on a clean Ubuntu runner.
+
+One CI bug was caught before the first push by simulating a runner: suite 20
+checks the reports directory is writable, and on a clean machine that directory
+does not exist, so the suite **failed**. Correct for a developer setting up,
+wrong for CI — which is why the workflow creates the directory first. Verified
+by running the whole job locally against an empty `$HOME`.
+
 ## 23. Still open
 
 1. **The 400 fix needs a re-import.** It is in `05_generate_workflow_json.py`

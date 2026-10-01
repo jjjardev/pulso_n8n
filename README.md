@@ -10,10 +10,10 @@ No external AI service, no API keys, no per-review cost.
 |---|---|
 | **Model** | [`jjjardev/tagasenti_model`](https://huggingface.co/jjjardev/tagasenti_model) — XLM-RoBERTa-large, INT8 quantized, CPU-only |
 | **Labels** | `Negative` / `Neutral` / `Positive` |
-| **Runtime** | 4 Docker containers: n8n, tagasenti (FastAPI + ONNX Runtime), Gotenberg (PDF), nginx (upload page) |
+| **Runtime** | 4 Docker containers: n8n **2.40.7 (pinned)**, tagasenti (FastAPI + ONNX Runtime), Gotenberg 8 (PDF), nginx (upload page) |
 | **Throughput** | A 100-review report completes end to end in **4.6–13.7 s** on a 6-core CPU (measured; the spread is machine load, not the model) |
 | **Credentials** | **Zero.** No API key, no token, no SMTP password. |
-| **Test coverage** | 267 assertions across 8 suites, plus 2 accuracy suites |
+| **Test coverage** | 280 assertions across 8 suites, plus 2 slow accuracy suites — **run on every push by CI** ([`.github/workflows/quick-suite.yml`](.github/workflows/quick-suite.yml)) |
 
 ---
 
@@ -68,8 +68,13 @@ abandoned before this one; that record is the most useful part of the repo.
 
 ## Quickstart
 
-**Requires:** Docker with Compose v2, ~2 GB free RAM, `python3`, and
-`node` (for two of the test suites). Model weights download automatically.
+**To run it:** Docker with Compose v2, and ~2 GB free RAM. That is the whole
+list — the runtime is four containers plus a static page. Model weights
+(553 MB) download automatically.
+
+**To run the tests additionally:** `python3` and `node`. Neither is used by the
+running system; they are only needed for the test suites and the workflow
+generator.
 
 ```bash
 git clone https://github.com/jjjardev/pulso_n8n.git
@@ -86,8 +91,11 @@ openssl rand -hex 32          # paste into N8N_ENCRYPTION_KEY in .env
 #    "tokenizer" that does not explain itself.
 bash tagasenti/fetch_model.sh
 
-# 3. Reports directory, writable by the container user (uid 1000).
-mkdir -p ~/Downloads/review-pulso && sudo chown 1000:1000 ~/Downloads/review-pulso
+# 3. Reports directory. chmod 777, not chown: n8n runs as uid 1000 inside the
+#    container, and a bind mount does not carry the container's supplementary
+#    groups to the host - so only the `other` permission bits are reliable.
+#    See OPERATIONS.md section 12 for the full reasoning.
+mkdir -p ~/Downloads/review-pulso && chmod 777 ~/Downloads/review-pulso
 
 # 4. Check everything a first run needs, before it fails halfway.
 bash tagasenti/preflight.sh
@@ -95,11 +103,30 @@ bash tagasenti/preflight.sh
 # 5. Start.
 sudo docker compose up -d --build
 
-# 6. Import the workflow: n8n UI → Workflows → ⋮ → Import from File
+# 6. FIRST VISIT: create the n8n owner account.
+#    Open http://localhost:5678. On a brand-new volume n8n shows a setup
+#    screen asking for an email and password - this is n8n's own, not this
+#    project's, and nothing here is stored in it. You need that account to
+#    reach the workflow import in the next step.
+#
+# 7. Import the workflow: n8n UI → Workflows → ⋮ → Import from File
 #    → workflow/review-pulso.workflow.json
 #    THEN click PUBLISH (top right). n8n 2.x has no "Active" toggle;
 #    Publish is what registers the production webhook.
 ```
+
+Steps 6 and 7 are the only manual parts, and both need a browser. Everything
+else is scripted.
+
+### What "first run" looks like
+
+| You see | Means |
+|---|---|
+| n8n setup screen at `:5678` | Expected on a new volume — create the owner account |
+| Upload page at `:8080`, drop a CSV, PDF appears | Working |
+| `"The report service is not running (HTTP 404)"` | Step 7's Publish click was missed |
+| Report never appears, page shows HTTP 500 | See `OPERATIONS.md` §9 |
+| `"That CSV was rejected"` with a reason | Working — the pipeline refused your file, on purpose |
 
 ### Only one copy can run at a time
 
@@ -122,7 +149,7 @@ Then open **<http://localhost:8080/>**.
 Verify the install:
 
 ```bash
-bash agent_journal/run_all_tests.sh    # 267 assertions, no containers needed
+bash agent_journal/run_all_tests.sh    # 280 assertions, no containers needed
 sudo bash agent_journal/09_smoke_test.sh   # needs the stack running
 ```
 

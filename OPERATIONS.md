@@ -432,10 +432,16 @@ sudo docker compose logs n8n --tail 60      # or tagasenti, gotenberg, uploader
 ---
 
 ## 7. How to add the workflow to n8n
-
-You need to do this once, and again whenever the workflow file changes.
-
-1. Open <http://localhost:5678> and log in.
+  
+  You need to do this once, and again whenever the workflow file changes.
+  
+  > **On a brand-new volume, there is nothing to log in to yet.** The first time
+  > you open <http://localhost:5678>, n8n shows its own setup screen asking for
+  > an email and password. Create that owner account — it belongs to n8n, this
+  > project stores nothing in it, and you cannot reach the workflow screen
+  > without it.
+  
+  1. Open <http://localhost:5678> and log in.
 2. Click **Workflows** in the left sidebar.
 3. Click the **⋮** (three dots) at the top right → **Import from File**.
 4. Choose `workflow/review-pulso.workflow.json`.
@@ -530,6 +536,15 @@ stay hard failures: **Node 5** fires when tagasenti returns a different number
 of results than reviews sent (a broken contract between our own services), and
 **Node 7** is the filename safety assertion that must block the write.
 
+If it happens on your very first upload, check these three first-run mistakes
+before reading logs — all three produce a confusing symptom on a fresh install:
+
+| What you see | Cause | Fix |
+|---|---|---|
+| `"The report service is not running (HTTP 404)"` | The workflow was imported but never **published** | Open the workflow, click **Publish** top-right. `Active` does not exist in n8n 2.x |
+| Cannot log in at `:5678`, no workflow screen | n8n's owner account was never created | Open `:5678` and create it — it is n8n's own setup screen, not part of this project |
+| Everything looks right but the page is stale | The old 9-node JSON is imported | You should see **11 nodes**. Re-import `workflow/review-pulso.workflow.json` |
+
 ### "Could not reach the server" / `TypeError: NetworkError`
 
 The browser could not deliver your file.
@@ -575,12 +590,34 @@ The reports folder isn't writable by the user inside the container.
 bash ~/Desktop/PROJECT_with_deps/pulso_n8n/agent_journal/20_check_downloads_permissions.sh
 ```
 
-The two users have different ids: the host user is **1001**, n8n inside the
-container is **1000**. The folder must be writable by others:
+n8n writes as uid **1000** inside the container. On this machine the host
+  user is **1001**, so ownership does not help and only the `other` permission
+  bits are available:
 
-```bash
-chmod 777 ~/Downloads/review-pulso
-```
+  ```bash
+  chmod 777 ~/Downloads/review-pulso
+  ```
+
+  ### Why `chmod 777` and not `chown 1000:1000`
+
+  Both instructions appear in older copies of this manual. They are not
+  equivalent, and the difference only shows up on some machines:
+
+  | Your host uid | dir `755` | dir `775` | dir `777` |
+  |---|---|---|---|
+  | **1001** (this machine) | cannot write | cannot write | **can write** |
+  | **1000** (a fresh Ubuntu's first user) | can write | can write | can write |
+
+  A bind mount does **not** map the container's supplementary groups onto the
+  host, so group permissions cannot be relied on — only `other` is. `test 20`
+  therefore checks the mode bits the way the kernel would, rather than trusting
+  either command.
+
+  `chown 1000:1000` works here because uid 1000 is a *different* account on this
+  machine, so the container becomes the owner. On a fresh box where your account
+  already **is** uid 1000, that command is a harmless no-op and the mode alone
+  decides. It appears to work everywhere, which is exactly why it is not the
+  instruction worth teaching. `chmod 777` is correct in both cases.
 
 ### The PDFs are read-only
 

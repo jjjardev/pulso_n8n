@@ -338,6 +338,33 @@ def main():
     check("Node 5: escapes review text before it reaches the PDF",
           "&amp;" in nodes["Node 5"]["parameters"]["jsCode"])
 
+    # ---- the n8n image must stay pinned --------------------------------
+    # Three behaviours this project depends on are version-specific: Publish
+    # replaced Active in 2.x, n8n renamed user_entity to user in 2.x, and
+    # Respond to Webhook moved responseCode into parameters.options. A
+    # floating :latest tag breaks all three silently, so the pin is asserted
+    # here rather than left to review.
+    print("\nCOMPOSE. Image pins")
+    compose_path = os.path.join(REPO_ROOT, "docker-compose.yml")
+    compose = open(compose_path, encoding="utf-8").read() if os.path.exists(
+        compose_path) else ""
+    m = re.search(r"^\s+image:\s*n8nio/n8n:(\S+)", compose, re.M)
+    check("n8n image is pinned to an explicit version",
+          m is not None,
+          m.group(1) if m else "image: n8nio/n8n has no tag -> floats to :latest")
+    if m:
+        check("pinned n8n version matches the documented one (2.40.7)",
+              m.group(1) == "2.40.7", m.group(1))
+    check("compose still mounts the reports volume at the container path",
+          ":/home/node/.n8n-files/downloads" in compose)
+    # Match the port MAPPING line, not any mention. The compose comments
+    # deliberately quote "0.0.0.0:5678:5678" as the thing not to do, so a naive
+    # search flags the warning text as if it were the configuration.
+    port_line = next((l for l in compose.splitlines()
+                      if re.match(r'\s*-\s*"?[\d.]*:5678:5678', l)), "")
+    check("n8n port is bound to loopback, not all interfaces",
+          "127.0.0.1:5678" in port_line, port_line.strip() or "no 5678 mapping found")
+
     # ---- the document in a glance ---------------------------------------
     print("\nKEY GOTCHAS THIS FILE EXISTS TO ENFORCE")
     for k, v in GOTCHAS.items():

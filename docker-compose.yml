@@ -69,7 +69,12 @@
 
 services:
   n8n:
-    image: n8nio/n8n
+    # PINNED, not :latest. This project is validated against 2.40.7, and three
+    # things in it are version-sensitive: Publish replaced Active in 2.x, n8n
+    # renamed the user_entity table to user in 2.x, and the Respond to Webhook
+    # node moved responseCode into parameters.options. A floating tag would
+    # break all three silently. Verified running: n8n 2.40.7
+    image: n8nio/n8n:2.40.7
     restart: unless-stopped
     ports:
       # Bound to loopback deliberately. The webhook has NO authentication of
@@ -261,7 +266,7 @@ services:
       - pulso
 
   gotenberg:
-    image: gotenberg/gotenberg:8
+    image: gotenberg/gotenberg:8   # major pin; API for HTML->PDF is stable
     restart: unless-stopped
     # NOT published - internal network only (see note 3 above).
     expose:
@@ -299,7 +304,7 @@ services:
   # it. Every other internal service uses `expose:` on purpose.
   # ---------------------------------------------------------------------
   uploader:
-    image: nginx:alpine
+    image: nginx:alpine          # floating, but the config used here is 30 lines
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:80"

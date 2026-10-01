@@ -1,0 +1,80 @@
+name: quick-suite
+
+# The repo makes numeric claims - throughput, timings, assertion counts - and
+# several of them drifted silently during the build. Every one of them was
+# caught by running something, never by reading the documentation. This workflow
+# is that "running something" on every push, on a clean Ubuntu runner.
+#
+# It runs the QUICK suite only: 8 suites, no containers, ~5 seconds. The slow
+# suites load the 537 MB ONNX model and the slow smoke test needs Docker
+# Compose with four containers, which does not fit a CI runner's time budget.
+# That split is deliberate - see run_all_tests.sh --full for the rest.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quick-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install node (needed by two suites)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Report the toolchain
+        run: |
+          python3 --version
+          node --version
+
+      # Suite 20 checks that the reports directory is writable by uid 1000, the
+      # user n8n runs as inside the container. On a clean runner that directory
+      # does not exist, so the suite FAILS until it is created. That is correct
+      # behaviour for a developer setting the project up, and wrong for CI -
+      # which is exactly why the suite is useful and why CI must prepare it.
+      # Verified: without this, suite 20 fails on a fresh runner.
+      - name: Create the reports directory
+        run: |
+          mkdir -p "${HOME}/Downloads/review-pulso"
+          chmod 777 "${HOME}/Downloads/review-pulso"
+          ls -ld "${HOME}/Downloads/review-pulso"
+
+      # Not fetched here. The quick suite is static: it validates the generated
+      # workflow JSON, node parameters, the CSV parser, filename safety and the
+      # upload page's contract - none of which load the model. Fetching 553 MB
+      # on every push would dominate the run for no added coverage.
+      - name: Run the quick suite
+        run: bash agent_journal/run_all_tests.sh
+
+      - name: Confirm the workflow JSON is what the generator produces
+        # Catches the failure mode the README warns about: someone edits
+        # workflow/review-pulso.workflow.json by hand, or edits the generator
+        # and forgets to re-run it, leaving the two out of sync.
+        run: |
+          cp workflow/review-pulso.workflow.json /tmp/before.json
+          python3 agent_journal/05_generate_workflow_json.py
+          if ! diff -q /tmp/before.json workflow/review-pulso.workflow.json; then
+            echo "::error::workflow/review-pulso.workflow.json differs from the"
+            echo "generator's output. Run 05_generate_workflow_json.py and commit."
+            exit 1
+          fi
+          echo "generated JSON matches the committed copy"
+
+      - name: Fetch and verify the model (pinned sha256, from the Hub)
+        # Proves fetch_model.sh works on a clean machine, which is the one part
+        # of setup a contributor cannot otherwise check without 553 MB of
+        # patience. The model is not committed, so this validates the script
+        # and the upstream digest rather than testing inference.
+        run: |
+          bash tagasenti/fetch_model.sh
+          echo "::notice::Model fetched and sha256-verified against the pinned digest."
