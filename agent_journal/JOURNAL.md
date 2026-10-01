@@ -2317,6 +2317,13 @@ into the repository root, paths were parameterised, and it was turned into a
 public repo. Then everything was tested again, including things the original
 build never tested.
 
+**A note on what "verified" means here.** Several claims in the first version of
+this part were wrong in the same way: a plausible number, written down from a
+run that had a defect in it, and never re-measured afterwards. The 12.8 rev/s
+figure, the "3x unexplained gap", and the 326 s worst-case all came from runs on
+a machine with a misconfigured tokenizer or under heavy load. Each looked like
+data. None was. The corrections are in §20.2 and §22b.
+
 ## 20. What testing found
 
 | # | Defect | How it was found | Severity |
@@ -2428,6 +2435,46 @@ Not "should work" - observed:
 - Fresh clone - `fetch_model.sh` verified all four files against pinned digests in 71s; image built in 101s
 - Generator is deterministic - regenerating produces a byte-identical workflow
 - `du -L` needed for the model size check, because the working tree uses a symlink and plain `du` reports 0
+
+## 22b. Two more, found by running the documented commands verbatim
+
+The audit in §20 checked that claims matched reality. It did not check that the
+*commands in the docs worked*. They did not.
+
+### The smoke test failed against a healthy stack
+
+`README.md` says:
+
+```bash
+sudo bash agent_journal/09_smoke_test.sh   # needs the stack running
+```
+
+Run exactly that, and it reported **11 CHECK(S) FAILED** - including
+"tagasenti is not running" and "Gotenberg ... cannot exec into container",
+against four services that were up and healthy.
+
+Cause: my own restructure. I had changed `COMPOSE_DIR` to derive from the
+script's location, reasoning that "the compose file now lives in the repo root."
+True - but the **running** deployment was still `~/n8n`, and Compose derives the
+project name from the directory. So the script asked about project `pulso_n8n`
+(project empty) while the live project was `n8n`. Every container lookup came
+back empty.
+
+The lesson: moving a compose file and *moving the deployment* are different
+operations, and I did the first and assumed the second. The script now detects
+which checkout actually has the stack running, and says so.
+
+### preflight reported a false failure
+
+Same root cause, different symptom. With the stack up and healthy, preflight said
+"port 5678 is already in use by another container" - about the user's own
+container. Preflight is presented in the README as a first-run check, so a false
+failure there is worse than no check. It now identifies the serving project and
+distinguishes "your stack, already up" from "a different project holds the port."
+
+This is the second time the directory-derived project name caused a real defect.
+It is the kind of fact that is invisible until a command that depends on it is
+run the way the documentation tells you to.
 
 ## 23. Still open
 

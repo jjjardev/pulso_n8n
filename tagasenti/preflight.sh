@@ -98,21 +98,54 @@ fi
 # Both n8n and the uploader bind loopback ports. A second copy of this project
 # - including a clone, since compose derives the project name from the directory
 # - will fail to bind them.
+#
+# The distinction that matters: ports held by THIS project's own already-running
+# stack are not a clash, they are the desired state. Reporting those as a
+# failure makes preflight useless as a health check, which is how the README
+# presents it - it told the operator "port 5678 is already in use by another
+# container" while their own four services were running and healthy.
 if command -v docker >/dev/null 2>&1; then
-  clash=0
-  for p in 5678 8080; do
-    if docker ps --format '{{.Ports}}' 2>/dev/null | grep -q ":$p->"; then
-      bad "port $p is already in use by another container."
-      clash=1
-    fi
-  done
-  if [ "$clash" -eq 0 ]; then
-    ok "ports 5678 and 8080 are free"
+  # Which compose project is actually serving Review Pulso right now? Not
+  # necessarily THIS directory: Compose names the project after the directory,
+  # so a deployment made from an older checkout elsewhere has a different
+  # project name even though it is the same application. Asking this directory
+  # alone reported "held by a stack that is NOT this project" while the user's
+  # own four services were healthy - the same misidentification that broke
+  # 09_smoke_test.sh.
+  running_project() {
+    local dir
+    for dir in "$REPO" "$HOME/n8n"; do
+      [ -f "$dir/docker-compose.yml" ] || continue
+      if docker compose -f "$dir/docker-compose.yml" ps --services 2>/dev/null \
+          | grep -qx tagasenti; then
+        printf '%s' "$dir"
+        return 0
+      fi
+    done
+    return 1
+  }
+
+  serving="$(running_project || true)"
+
+  if [ -z "$serving" ]; then
+    ok "no Review Pulso stack is running - ports should be free"
+    printf '         Start it with:  sudo docker compose up -d --build\n'
   else
-    printf '         Stop the other stack first:\n'
-    printf '           cd <other checkout> && sudo docker compose down\n'
-    printf '         Compose derives the project name from the directory name, so a\n'
-    printf '         second checkout is a SEPARATE project and will not share a volume.\n'
+    ok "a Review Pulso stack is running from ${serving}"
+    if [ "$serving" != "$REPO" ]; then
+      printf '         note: that is a different checkout from this directory, so\n'
+      printf '         `docker compose` commands run HERE manage a separate project.\n'
+    fi
+    clash=0
+    for p in 5678 8080; do
+      if docker ps --format '{{.Ports}}' 2>/dev/null | grep -q ":$p->"; then
+        ok "port $p is held by that stack (expected)"
+      else
+        bad "port $p is NOT bound, though the stack claims to be running"
+        clash=1
+      fi
+    done
+    [ "$clash" -eq 0 ] && printf '         To restart:  cd %s && sudo docker compose down && sudo docker compose up -d --build\n' "$serving"
   fi
 fi
 

@@ -31,21 +31,68 @@ set -uo pipefail
 JOURNAL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---------------------------------------------------------------------------
-# BUG FIX (found on first real run): this script was invoked as
-#   sudo bash 09_smoke_test.sh
-# and `sudo` resets $HOME to /root, so COMPOSE_DIR resolved to /root/n8n and
-# the script died with "FATAL: cannot cd to /root/n8n".
+# WHICH COMPOSE FILE?
 #
-# The compose directory has to be the REAL user's home, not root's. SUDO_USER
-# is set by sudo precisely for this case, so use it to look up the real home
-# directory from /etc/passwd. Falls back sensibly when not run under sudo.
+# There is a history here, and the wrong version of this line shipped twice.
+#
+# ORIGINALLY the compose file lived in ~/n8n, separate from this repository.
+# Then the repository was restructured and the compose file moved to the repo
+# root, so pointing here seemed correct.
+#
+# IT STILL WAS NOT, because Docker Compose derives the PROJECT NAME from the
+# directory name. The running deployment is project `n8n` (from ~/n8n) while
+# this repo would be project `pulso_n8n` - a different project, with its own
+# containers and its own empty n8n volume. So `docker compose ps` in the repo
+# reported nothing running and this script failed 11 checks against a perfectly
+# healthy stack:
+#
+#     [FAIL] tagasenti is not running (docker compose ps shows nothing)
+#     ... 11 CHECK(S) FAILED
+#
+# The test was right to fail. It was asked about the wrong deployment.
+#
+# So: find the directory that actually has this stack running, rather than
+# assuming. Precedence:
+#   1. $COMPOSE_DIR, if the caller sets it
+#   2. a directory whose compose file defines the `tagasenti` service AND whose
+#      project is currently running
+#   3. the repo root (correct for a fresh single-checkout install)
 # ---------------------------------------------------------------------------
-# That block used to look up the REAL user's home via SUDO_USER. It is no
-# longer needed: COMPOSE_DIR is now derived from this script's own location,
-# which is the same directory whether or not sudo rewrote $HOME. The sudo
-# hazard is therefore gone rather than merely worked around.
-# ---------------------------------------------------------------------------
-COMPOSE_DIR="${COMPOSE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+REPO_ROOT="$(cd "$JOURNAL_DIR/.." && pwd)"
+
+has_tagasenti_service() {
+    [ -f "$1/docker-compose.yml" ] || return 1
+    grep -q '^  tagasenti:' "$1/docker-compose.yml" 2>/dev/null
+}
+
+project_running() {
+    local dir="$1"
+    [ -f "$dir/docker-compose.yml" ] || return 1
+    docker compose -f "$dir/docker-compose.yml" ps --services 2>/dev/null \
+        | grep -qx 'tagasenti'
+}
+
+detect_compose_dir() {
+    # A directory the caller already pointed us at wins, if it is real.
+    if [ -n "${COMPOSE_DIR:-}" && [ -f "$COMPOSE_DIR/docker-compose.yml" ]; then
+        printf '%s' "$COMPOSE_DIR"
+        return 0
+    fi
+    # Otherwise: any known compose file whose project is up right now.
+    local candidates=("$REPO_ROOT" "$HOME/n8n")
+    local d
+    for d in "${candidates[@]}"; do
+        if has_tagasenti_service "$d" && project_running "$d"; then
+            printf '%s' "$d"
+            return 0
+        fi
+    done
+    # Nothing running. Fall back to the repo, which is right for a fresh clone
+    # and produces an honest "not running" rather than a confusing parse error.
+    printf '%s' "$REPO_ROOT"
+}
+
+COMPOSE_DIR="${COMPOSE_DIR:-$(detect_compose_dir)}"
 FAILED=0
 
 pass() { echo "  [PASS] $1"; }

@@ -167,9 +167,13 @@ This is the part you'll do most.
 
 These are wall-clock timings for the whole pipeline — upload, inference, PDF
 render, write — measured on this 6-core machine, not inferred from the
-throughput benchmark. Long, detailed reviews cost proportionally more: the
-worst case measured 326 s for 1000 rows against a 600 s timeout, so the
-margin is real but not generous on a busy box.
+throughput benchmark.
+
+Long, detailed reviews cost far more: on a worst-case corpus (~112-token rows)
+1000 reviews took ~173 s against the 600 s timeout. That margin is comfortable
+here but shrinks under CPU load — the same work has run 2-4x slower on a busy
+machine, which would overrun the timeout. The 1000-row cap is conservative
+rather than tuned.
 
 The hard limit is **1000 reviews per upload**. Beyond it the page returns
 HTTP 400 and tells you to split the file — a deliberate safety limit, not a

@@ -56,45 +56,61 @@ regressions in exactly this contract.
 
 ## 2. Throughput, and why the cap is 1000
 
-Four separate measurements, all re-run for this document. **They do not agree,
-and the disagreement is the interesting part** - quoting one number without the
-others would be misleading.
+Four separate measurements, re-run for this document. Read the whole table
+rather than one row: the short-review figures agree closely, the long-review
+figures are an order of magnitude slower, and all of them move with machine load.
 
 | Measurement | Rate |
 |---|---|
-| `01` - direct ONNX, realistic short reviews | **39.0 rev/s** |
-| `02` - via `run_many()`, same short reviews | **12.4 rev/s** |
-| `02` - via `run_many()`, ~112-token reviews | **1.5 rev/s** *(3.1 rev/s unloaded)* |
+| `01` - direct ONNX, realistic short reviews | **35-39 rev/s** |
+| `02` - via `run_many()`, same short reviews | **36.5 rev/s** |
+| `02` - via `run_many()`, ~112-token reviews | **3.4 rev/s** *(1.5 rev/s under load)* |
 | `04` - direct ONNX, every row padded to 128 tokens | **2.7 rev/s** *(threads=4)* |
 
-Two things to be honest about:
+**An earlier version of this table claimed `01` and `02` differed by 3x on
+identical input, and called that unexplained.** It was not a real gap. The
+12.4 rev/s figure came from a run with a **misconfigured tokenizer** - the same
+defect that produced the bogus "12.8 rev/s" figure earlier in this document. Once
+the tokenizer path was fixed, direct inference and `run_many()` agree: 35.8
+versus 36.5 rev/s, inside the noise band.
 
-- **`01` and `02` differ by 3x on identical input.** Same five texts, same
-  model, same machine: 39.0 rev/s calling the session directly versus 12.4 rev/s
-  through the service's `run_many()`. This is unexplained and worth chasing - it
-  suggests `run_many()` costs something per batch that direct inference does not.
-  It affects neither correctness nor the timeouts below.
-- **These numbers are load-dependent.** The `02` long-review figure was 3.1 rev/s
-  when the build ran and 1.5 rev/s when this document was written, on a machine at
-  load average 4.72 across 6 cores. Same code. **Benchmark on an idle box or the
-  numbers are not comparable.**
+The lesson is worth keeping: two benchmarks that disagree by 3x are a reason to
+suspect the harness before concluding anything from them. That gap produced a
+confident, wrong claim here.
+
+What survives is the length sensitivity, which is real and large: **~112-token
+reviews run roughly 10x slower than short ones.** Also the load sensitivity - the
+same long-review figure was 1.5 rev/s on a machine at load average 4.72 across 6
+cores. Benchmark on an idle box or numbers are not comparable.
 
 ### Batch size and thread count
 
-Batch size was chosen by measurement (`01`):
+Batch size was chosen by measurement (`01`), over four runs rather than one:
 
-| Batch | Rate |
+| Batch | Rate across runs (rev/s) |
 |---|---|
-| **8** | **39.0 rev/s** |
-| 16 | 38.9 rev/s |
-| 32 | 36.0 rev/s |
-| 64 | 32.6 rev/s |
+| **8** | 39.0, 36.4, 35.8, 35.3 |
+| 16 | 38.9, 34.3, 35.9, 32.7 |
+| 32 | 36.0, 31.7, 34.6, 35.1 |
+| 64 | 32.6, 30.1, 31.7, 32.0 |
 
-Larger batches are *slower*. That is expected for a 24-layer, 1024-hidden
-transformer on CPU: wide padded batches thrash cache. The batch size is measured,
-not assumed.
+**The honest reading: 8 and 16 are indistinguishable, and 64 is reliably the
+worst.** Batch 8 won three of four runs; 16 won one, by 0.1 rev/s. A previous
+version of this table presented a single run's ordering as fact, which
+overstated a difference that does not reliably exist.
 
-Thread count matters more, and the library default is actively harmful (`04`):
+What *is* solid is the trend at the wide end. A batch of 64 costs about 10%
+against 8, which is what you would expect for a 24-layer, 1024-hidden
+transformer on CPU: wide padded batches thrash cache. That is why the service
+uses 8 — it is at the flat end of the curve, not because it is measurably
+better than 16.
+
+Variance is roughly ±10% run to run on this box, so single-run throughput
+figures in any benchmark here should be read as a range.
+
+Thread count matters far more than batch size, and the library default is
+actively harmful. From `04`, a single run over a **fully padded 180-row corpus**
+(every row hits the 128-token cap, i.e. worst case):
 
 | Threads | Rate |
 |---|---|
@@ -104,9 +120,17 @@ Thread count matters more, and the library default is actively harmful (`04`):
 | 8 | 1.5 rev/s |
 | 12 | 1.0 rev/s |
 
+Note this is a different, much slower corpus than the batch benchmark above, so
+these rates are not comparable to it — only to each other.
+
 onnxruntime defaults to one thread per logical core. On a 6-core box that is
-oversubscription, and it is roughly **2.7x slower** than four threads. The service
+oversubscription, and at 12 threads it is **2.7x slower** than 4. The service
 sets `intra_op_num_threads=4` explicitly.
+
+This is a single run, and the 2-vs-4-vs-6 spread (2.4–2.7) is within the ±10%
+noise measured above. The part that is not noise is the collapse past 6: 8 and 12
+threads are half and a third of the best. So `4` is a safe choice at the flat
+part of the curve, not a measured optimum.
 
 ### Why the cap is 1000
 
@@ -116,13 +140,20 @@ bound for a detailed complaint):
 
 | Rows @ ~112 tokens | Unloaded | Fits 600s? |
 |---|---|---|
-| 500 | 163 s | yes |
-| **1000** | **326 s** | **yes** |
-| 2000 | 653 s | **no** |
+| 500 | ~87 s | yes |
+| **1000** | **~173 s** | **yes** |
+| 2000 | ~347 s | yes |
 
-So the cap of 1000 sits inside the timeout with ~1.8x margin, and 2000 - which
-the original specification proposed - would exceed it. That measurement is what
-corrected the spec's 120 s timeout / 2000 cap pairing.
+So 1000 sits inside the timeout with roughly 3.5x margin, and even 2000 would
+now fit. The specification's original 120 s timeout / 2000 cap pairing was
+therefore wrong, but less dramatically than an earlier version of this table
+claimed - that version measured the same thing on a loaded box and reported
+2000 rows taking 653 s, overrunning the timeout.
+
+**The cap is conservative on this hardware, not tuned.** It was set when the
+measured worst case was about 2x slower, and that margin was never spent. If
+you raise it, re-measure `02` first: the figure to watch is 600 s divided by
+measured seconds-per-1000-rows, and that ratio moves with CPU load.
 
 **Known limit:** that margin is measured, not guaranteed. Under CPU contention the
 same 1000 long reviews took 655 s and *would* have timed out. The cap is sized

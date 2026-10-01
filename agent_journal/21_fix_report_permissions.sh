@@ -55,7 +55,8 @@ if [ "$(id -u)" -ne 0 ]; then
     echo "WARNING: running as uid $(id -u), not root."
     echo
     echo "  Reports are created by n8n as uid 1000. Only the OWNER or ROOT can"
-    echo "  chmod them, so this run cannot change any file's permissions."
+    echo "  chmod them, so this run cannot change the REPORTS' permissions."
+    echo "  (Your own files are unaffected - you can chmod those as their owner.)"
     echo
     echo "  Re-run with sudo:   sudo bash $SELF"
     echo
