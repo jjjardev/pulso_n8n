@@ -204,8 +204,11 @@ fi
 # --- 5. Gotenberg ---------------------------------------------------------
 echo
 echo "T6. Gotenberg converts the sample report HTML to A4 PDF"
-HTML="$JOURNAL_DIR/sample-report.html"
-PDF="$JOURNAL_DIR/smoke-test-report.pdf"
+# 07_render_sample_report.py writes into evidence/, and the committed sample
+    # lives there. These paths pointed at the directory root, so T6 failed with
+    # "missing" on a file that was present.
+    HTML="$JOURNAL_DIR/evidence/sample-report.html"
+PDF="$JOURNAL_DIR/evidence/smoke-test-report.pdf"
 if [ ! -f "$HTML" ]; then
     fail "$HTML missing - run: python3 07_render_sample_report.py"
 elif ! docker compose exec -T gotenberg true 2>/dev/null; then

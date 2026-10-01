@@ -51,64 +51,87 @@ regressions in exactly this contract.
 
 ---
 
-## 2. Batching, and why the cap is 1000
+## 2. Throughput, and why the cap is 1000
 
-The ONNX service processes batches of 8. Benchmarks (`04`, `08`) established
-that larger batches are **slower**, not faster:
+Four separate measurements, all re-run for this document. **They do not agree,
+and the disagreement is the interesting part** - quoting one number without the
+others would be misleading.
 
-| Batch | Throughput |
+| Measurement | Rate |
 |---|---|
-| 8 | **37.3 rev/s** |
-| 32 | ~34 rev/s |
-| 64 | 32.1 rev/s |
+| `01` - direct ONNX, realistic short reviews | **39.0 rev/s** |
+| `02` - via `run_many()`, same short reviews | **12.4 rev/s** |
+| `02` - via `run_many()`, ~112-token reviews | **1.5 rev/s** *(3.1 rev/s unloaded)* |
+| `04` - direct ONNX, every row padded to 128 tokens | **2.7 rev/s** *(threads=4)* |
 
-That is expected for a 24-layer, 1024-hidden transformer on CPU: wide padded
-batches thrash cache. The batch size is measured, not assumed.
+Two things to be honest about:
 
-Thread count matters more than batch size, and the default is actively harmful:
+- **`01` and `02` differ by 3x on identical input.** Same five texts, same
+  model, same machine: 39.0 rev/s calling the session directly versus 12.4 rev/s
+  through the service's `run_many()`. This is unexplained and worth chasing - it
+  suggests `run_many()` costs something per batch that direct inference does not.
+  It affects neither correctness nor the timeouts below.
+- **These numbers are load-dependent.** The `02` long-review figure was 3.1 rev/s
+  when the build ran and 1.5 rev/s when this document was written, on a machine at
+  load average 4.72 across 6 cores. Same code. **Benchmark on an idle box or the
+  numbers are not comparable.**
 
-| Threads | Throughput |
+### Batch size and thread count
+
+Batch size was chosen by measurement (`01`):
+
+| Batch | Rate |
+|---|---|
+| **8** | **39.0 rev/s** |
+| 16 | 38.9 rev/s |
+| 32 | 36.0 rev/s |
+| 64 | 32.6 rev/s |
+
+Larger batches are *slower*. That is expected for a 24-layer, 1024-hidden
+transformer on CPU: wide padded batches thrash cache. The batch size is measured,
+not assumed.
+
+Thread count matters more, and the library default is actively harmful (`04`):
+
+| Threads | Rate |
 |---|---|
 | 2 | 2.4 rev/s |
 | **4** | **2.7 rev/s** |
+| 6 | 2.6 rev/s |
 | 8 | 1.5 rev/s |
 | 12 | 1.0 rev/s |
 
-onnxruntime defaults to one thread per logical core; on this box that is
-oversubscription, and it is roughly **2× slower** than four threads. The service
+onnxruntime defaults to one thread per logical core. On a 6-core box that is
+oversubscription, and it is roughly **2.7x slower** than four threads. The service
 sets `intra_op_num_threads=4` explicitly.
 
-### Where 1000 comes from
+### Why the cap is 1000
 
-`01` measures throughput on a corpus of reviews deliberately padded past the
-128-token truncation limit, because a full-length row is the most expensive
-thing you can ask the model to compute. Padded rows are dramatically slower than
-the median row:
+The cap is derived from the worst case, not the average. `02` sizes it against
+**Node 4's 600-second timeout**, using ~112-token reviews (a realistic upper
+bound for a detailed complaint):
 
-| Corpus | Rate |
-|---|---|
-| Median-length reviews | **37.3 rev/s** |
-| Every row padded past 128 tokens (worst case) | **12.8 rev/s** |
+| Rows @ ~112 tokens | Unloaded | Fits 600s? |
+|---|---|---|
+| 500 | 163 s | yes |
+| **1000** | **326 s** | **yes** |
+| 2000 | 653 s | **no** |
 
-Sizing uses the worst case, with 2× headroom for a loaded machine:
+So the cap of 1000 sits inside the timeout with ~1.8x margin, and 2000 - which
+the original specification proposed - would exceed it. That measurement is what
+corrected the spec's 120 s timeout / 2000 cap pairing.
 
-```
-est_seconds = cap / 12.8
-cap / 12.8 * 2  <  120s     ->     cap < 768
-```
+**Known limit:** that margin is measured, not guaranteed. Under CPU contention the
+same 1000 long reviews took 655 s and *would* have timed out. The cap is sized
+for an unloaded machine. Two independent guards sit behind it:
 
-A 120 s budget yields a ceiling of **768** on pure worst case. The cap is set to
-**1000** — deliberately above the worst-case ceiling, because a corpus where
-*every* row is a 128-token row is not a real corpus. The benchmark is an upper
-bound, not an expectation. Two independent guards sit behind it:
-
-1. **Node 3 rejects** uploads over 1000 rows, before any inference runs.
-2. **The service caps** at 2000 (`MAX_BATCH_REVIEWS`) as a backstop for direct
-   callers who bypass the workflow.
+1. **Node 3 rejects** uploads over 1000 rows, and deduplicates first, so repeated
+   rows do not count against the cap.
+2. **The service caps** at 2000 (`MAX_BATCH_REVIEWS`) for direct callers who
+   bypass the workflow.
 
 Node 4 has a 600 s timeout; the workflow itself has 900 s. Measured reality is
-4.7–12.4 s for a 100-review report — three orders of magnitude of headroom
-against the pathological case.
+**4.7-13.7 s** end to end for a 100-review report.
 
 ### Why single-worker is deliberate
 
@@ -273,6 +296,47 @@ text, not markup. `test 17` covers it.
 Three independent caps on the expensive operation: Node 3 rejects >1000 rows,
 the service caps at 2000, and the HTTP layer times out. Any one of them alone
 would be enough; three means no single mistake opens the door.
+
+Verified by live upload, not by inspection:
+
+| Input | Result |
+|---|---|
+| 100 reviews, normal | HTTP 200, PDF written, 13.7 s |
+| `business_name=<script>alert(1)</script>` | HTTP 200, filename slugified to `script-alert-1-script`, payload rendered as **literal text** in the PDF header |
+| `business_name=../../../../etc/cron.d/pwned` | HTTP 200, filename slugified to `etc-cron-d-pwned`, **nothing written outside the output directory** |
+| 1100 rows, 100 unique (repeated 11x) | HTTP 200, 100 scored — **deduped before the cap is applied** |
+| 1100 rows, all unique | **HTTP 500** — rejected by the cap |
+
+### Known defect: the cap rejection is unhelpful
+
+The last row above is a real bug, found by live test.
+
+Node 3 builds a detailed, actionable message:
+
+```
+Too many reviews: 1100 unique rows found, cap is 1000.
+Split the CSV into files of 1000 rows or fewer and upload each one -
+each file gets its own report. Uploads of ~500 rows finish in about a
+minute; the cap is a safety limit, not a target.
+```
+
+…and then `throw`s it. A throw aborts the execution, so **`Respond to Webhook`
+never runs** and n8n returns a bare `{"message":"Error in workflow"}` with
+HTTP 500. The client uploading a 1001-row CSV is told nothing useful, and the
+message that would have told them exactly what to do is discarded.
+
+The cap *works* — that is verified. What is broken is the error surface.
+
+Two candidate fixes, neither taken unilaterally because both change the node
+graph and both require a re-import:
+
+1. **Return, don't throw.** Have Node 3 emit `{error: "…", batches: []}` and let
+   `Respond to Webhook` return HTTP 400 with that message. Node 4 receiving zero
+   items would pass through, so the Respond node still executes.
+2. **Add an IF node** after Node 3 to branch error vs. normal, and wire the error
+   branch straight to a 400 response. One more node, but explicit.
+
+Either way the fix belongs in `05_generate_workflow_json.py`, not in n8n.
 
 ---
 
